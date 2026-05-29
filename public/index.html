@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kitty Remote Deck</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell" id="appShell">
+      <header class="topbar">
+        <div class="brand-block">
+          <strong class="brand-mark">KRD</strong>
+          <div>
+            <p class="eyebrow">Kitty Remote Deck · v0.1.0</p>
+            <h1>Remote Kitty Workbench</h1>
+          </div>
+        </div>
+
+        <div class="topbar-controls">
+          <div class="view-controls" aria-label="View controls">
+            <div class="segmented-control font-control" aria-label="字号">
+              <button class="toolbar-button" id="decreaseFontBtn" type="button" title="减小字号">A-</button>
+              <span class="font-size-value" id="fontSizeValue" title="字号">13px</span>
+              <button class="toolbar-button" id="increaseFontBtn" type="button" title="增大字号">A+</button>
+            </div>
+
+            <label class="theme-control" title="主题">
+              <span class="theme-dot" aria-hidden="true"></span>
+              <select id="themeSelect" aria-label="主题">
+                <option value="dark">Dark</option>
+                <option value="graphite">Graphite</option>
+                <option value="light">Light</option>
+              </select>
+            </label>
+
+            <label class="resize-lock" title="允许拖拽调整布局">
+              <input id="resizeToggle" type="checkbox" />
+              <span id="resizeLabel">Layout Locked</span>
+            </label>
+          </div>
+
+        </div>
+
+        <div class="topbar-actions">
+          <span class="auth-device-label" id="authDeviceLabel" hidden></span>
+          <button class="ghost-button" id="logoutBtn" type="button" hidden>退出</button>
+          <button class="ghost-button" id="reloadSessionsBtn" type="button">刷新</button>
+          <button class="secondary-button" id="connectTargetBtn" type="button">连接</button>
+        </div>
+      </header>
+
+      <div class="workbench">
+        <nav class="activity-bar" aria-label="Workbench views">
+          <button class="activity-item active" id="showSshViewBtn" type="button" data-view="ssh" aria-label="Connect view" title="Connect">
+            <span class="activity-icon" aria-hidden="true">🔗</span>
+            <span class="sr-only">Connect</span>
+          </button>
+          <button class="activity-item" id="showSessionsViewBtn" type="button" data-view="sessions" aria-label="Session view" title="KT Sessions">
+            <span class="activity-icon">▦</span>
+            <span class="sr-only">Session</span>
+          </button>
+        </nav>
+
+        <aside class="primary-sidebar" id="primarySidebar">
+          <section class="sidebar-view" id="sessionsSidebarView" hidden>
+            <div class="sidebar-head">
+              <div>
+                <p class="section-kicker">KT Sessions</p>
+                <h2>Session Explorer</h2>
+              </div>
+              <button class="icon-button" id="reloadSessionTreeBtn" type="button" aria-label="刷新会话">↻</button>
+            </div>
+
+            <label class="compact-select socket-field">
+              <span>Socket</span>
+              <select id="socketSelect"></select>
+            </label>
+
+            <div class="status-panel subtle" id="sessionSummary">
+              连接成功后，这里会列出 kitty 的 OS 窗口、tabs 和 panes。
+            </div>
+
+            <div class="session-tree scroll-panel" id="sessionTree"></div>
+          </section>
+
+          <section class="sidebar-view ssh-sidebar-view" id="sshSidebarView">
+            <div class="sidebar-head">
+              <div>
+                <p class="section-kicker">Connection Targets</p>
+                <h2>Connect</h2>
+              </div>
+              <button class="icon-button" id="reloadTargetsBtn" type="button" aria-label="重新载入目标">↻</button>
+            </div>
+
+            <section class="ssh-target-summary">
+              <label class="target-picker">
+                <span>Active Target</span>
+                <select id="targetSelect"></select>
+              </label>
+              <div class="summary-actions">
+                <button class="secondary-button" id="testTargetBtn" type="button">Test</button>
+                <button class="ghost-button" id="newTargetBtn" type="button">New</button>
+              </div>
+            </section>
+
+            <section class="settings-section target-list-section">
+              <div class="section-row-head">
+                <span>Saved Targets</span>
+                <small>local / ssh</small>
+              </div>
+              <div class="saved-targets scroll-panel" id="savedTargets"></div>
+            </section>
+
+            <form id="targetForm" class="target-form">
+              <section class="settings-section connection-section">
+                <div class="section-row-head">
+                  <span>Connection</span>
+                  <small>local / ssh</small>
+                </div>
+                <label>
+                  <span>名称</span>
+                  <input id="targetName" name="name" placeholder="Local Kitty" required />
+                </label>
+                <label>
+                  <span>连接类型</span>
+                  <select id="targetTransport" name="transport" required>
+                    <option value="local">Local</option>
+                    <option value="ssh">SSH</option>
+                  </select>
+                </label>
+                <label>
+                  <span>SSH 目标</span>
+                  <input id="targetSsh" name="sshTarget" placeholder="ssh-host" />
+                </label>
+              </section>
+
+              <section class="settings-section kitty-section">
+                <div class="section-row-head">
+                  <span>Kitty Remote Control</span>
+                  <small>kitty @</small>
+                </div>
+                <label>
+                  <span>Kitty 二进制</span>
+                  <input id="targetKittyBinary" name="kittyBinary" placeholder="kitty" />
+                </label>
+                <label>
+                  <span>Socket 匹配</span>
+                  <input id="targetSocketPattern" name="socketPattern" placeholder="/tmp/kitty.sock-*" />
+                </label>
+                <label>
+                  <span>默认 Socket（可选）</span>
+                  <input id="targetDefaultSocket" name="defaultSocket" placeholder="/tmp/kitty.sock-11305" />
+                </label>
+              </section>
+
+              <section class="settings-section notes-section">
+                <div class="section-row-head">
+                  <span>Notes</span>
+                  <small>optional</small>
+                </div>
+                <label>
+                  <span>备注</span>
+                  <textarea id="targetNotes" name="notes" rows="3" placeholder="记录这台机器的用途、布局或约定。"></textarea>
+                </label>
+              </section>
+
+              <div class="sidebar-sticky-actions">
+                <button class="secondary-button" id="saveTargetBtn" type="submit">Save Target</button>
+              </div>
+            </form>
+
+            <div class="status-panel" id="targetStatus">
+              目标设置会保存在本地。Local 会直接控制本机 kitty；SSH 会通过远端 helper 控制目标主机。
+            </div>
+          </section>
+        </aside>
+
+        <div class="resize-handle sidebar-resize-handle" id="sidebarResizeHandle" role="separator" aria-orientation="vertical"></div>
+
+        <main class="editor-region">
+          <section class="editor-pane" id="editorPane">
+            <div class="editor-toolbar">
+              <div class="editor-tab" id="viewerMeta">
+                选中一个 pane 后，这里会显示它的标题、目录和当前前台进程。
+              </div>
+              <div class="editor-tools">
+                <div class="segmented-control editor-mode-control" aria-label="Editor text extent">
+                  <button class="mode-button active" id="screenModeBtn" type="button" aria-pressed="true">Screen</button>
+                  <button class="mode-button" id="allTextModeBtn" type="button" aria-pressed="false">All</button>
+                </div>
+                <button class="ghost-button compact-editor-button" id="refreshTextBtn" type="button">Refresh</button>
+                <label class="toggle">
+                  <input id="autoRefreshToggle" type="checkbox" checked />
+                  <span>自动刷新</span>
+                </label>
+              </div>
+            </div>
+
+            <pre class="screen-output scroll-panel" id="screenOutput">等待选择一个 kitty pane…</pre>
+          </section>
+
+          <div class="resize-handle panel-resize-handle" id="panelResizeHandle" role="separator" aria-orientation="horizontal"></div>
+
+          <section class="bottom-panel">
+            <div class="panel-head compact-panel-head">
+              <p class="section-kicker">Input Console</p>
+              <div class="panel-mini-actions">
+                <span>Enter 发送</span>
+                <span>Shift+Enter 换行</span>
+              </div>
+            </div>
+
+            <form id="sendForm" class="send-form">
+              <label class="composer-field">
+                <span class="sr-only">发送文本</span>
+                <textarea id="sendTextInput" rows="4" placeholder="Enter 发送文本&#10;Shift+Enter 换行&#10;空输入按 Enter 发送 Enter"></textarea>
+              </label>
+              <div class="console-actions">
+                <button class="primary-button" id="sendTextBtn" type="submit">Send</button>
+                <button class="ghost-button" id="sendEnterBtn" type="button">Enter</button>
+                <button class="ghost-button" id="sendEscBtn" type="button">Esc</button>
+                <button class="ghost-button" id="sendCtrlCBtn" type="button">Ctrl+C</button>
+                <button class="ghost-button" id="sendCtrlDBtn" type="button">Ctrl+D</button>
+              </div>
+            </form>
+          </section>
+        </main>
+
+        <aside class="preview-drawer" id="previewDrawer" aria-label="Browser" aria-hidden="true">
+          <div class="resize-handle browser-resize-handle" id="browserResizeHandle" role="separator" aria-orientation="vertical"></div>
+          <div class="preview-head">
+            <div>
+              <p class="section-kicker">Embedded Browser</p>
+              <h2 id="previewTitle">Browser</h2>
+            </div>
+            <div class="preview-head-actions">
+              <button class="icon-button" id="pinBrowserBtn" type="button" aria-label="固定 Browser" aria-pressed="false">📌</button>
+              <button class="icon-button" id="closePreviewBtn" type="button" aria-label="隐藏 Browser">×</button>
+            </div>
+          </div>
+          <form class="browser-bar" id="browserAddressForm">
+            <button class="icon-button browser-nav-button" id="browserBackBtn" type="button" aria-label="返回上一个网址" disabled>‹</button>
+            <button class="icon-button browser-nav-button" id="browserForwardBtn" type="button" aria-label="前进到下一个网址" disabled>›</button>
+            <label class="browser-address-field">
+              <span class="sr-only">Browser URL</span>
+              <input id="browserAddressInput" type="text" spellcheck="false" autocomplete="off" placeholder="https://example.com 或 file:///tmp/report.html" />
+            </label>
+            <select class="browser-history-select" id="browserHistorySelect" aria-label="浏览历史">
+              <option value="">History</option>
+            </select>
+            <button class="secondary-button browser-go-button" id="browserGoBtn" type="submit">Go</button>
+          </form>
+          <div class="preview-address" id="previewAddress">点击 terminal 里的 URL，或在地址栏输入 URL。</div>
+          <iframe class="preview-frame" id="urlPreviewFrame" title="Embedded browser" sandbox="allow-forms allow-modals allow-popups allow-scripts"></iframe>
+        </aside>
+        <button class="preview-reopen-button" id="reopenPreviewBtn" type="button" hidden aria-label="重新打开 Browser">Browser</button>
+      </div>
+
+      <footer class="status-bar">
+        <div class="status-group primary">
+          <span class="status-pill" id="targetHealth">未连接</span>
+          <span id="statusTargetName">Target: -</span>
+          <span id="statusSocketName">Socket: auto</span>
+        </div>
+        <div class="status-group secondary">
+          <span id="statusMessage">Ready</span>
+          <span id="statusPaneName">Pane: -</span>
+          <span id="statusAutoRefresh">Auto-refresh: on</span>
+        </div>
+      </footer>
+
+      <section class="auth-gate" id="authGate" hidden>
+        <form class="auth-card" id="authForm">
+          <div>
+            <p class="section-kicker">Device Access</p>
+            <h2>Kitty Remote Deck</h2>
+          </div>
+          <label>
+            <span>Device Token</span>
+            <input id="authTokenInput" type="password" autocomplete="current-password" spellcheck="false" required />
+          </label>
+          <button class="primary-button" type="submit">Sign In</button>
+          <p class="auth-status" id="authStatusText">请输入这台设备对应的 token。</p>
+        </form>
+      </section>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,8 @@
+node_modules/
+data/
+tmp/
+test-results/
+playwright-report/
+*.log
+__pycache__/
+*.pyc

@@ -1,0 +1,10 @@
+{
+  "name": "kitty-remote-deck",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local web front-end for browsing and controlling local or SSH kitty GUI sessions.",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  }
+}
