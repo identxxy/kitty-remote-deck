@@ -505,7 +505,8 @@ button {
 
 .mobile-back-button,
 .mobile-connect-button,
-.mobile-width-button {
+.mobile-width-button,
+.mobile-browser-back-button {
   display: none;
 }
 
@@ -1544,12 +1545,14 @@ textarea::-webkit-scrollbar-thumb:hover {
   }
 
   .app-shell.mobile-screen-chat .primary-sidebar,
+  .app-shell.mobile-screen-browser .primary-sidebar,
   .app-shell.mobile-screen-connect .editor-region,
   .app-shell.mobile-screen-sessions .editor-region {
     display: none;
   }
 
-  .app-shell.mobile-screen-chat .editor-region {
+  .app-shell.mobile-screen-chat .editor-region,
+  .app-shell.mobile-screen-browser .editor-region {
     display: grid;
   }
 
@@ -1768,9 +1771,17 @@ textarea::-webkit-scrollbar-thumb:hover {
   }
 
   .preview-drawer {
-    width: var(--browser-width);
+    position: fixed;
+    z-index: 42;
+    inset: 0;
+    width: 100vw;
     max-width: 100vw;
     min-width: 0;
+    height: 100svh;
+    height: 100dvh;
+    border-left: 0;
+    transform: translateX(100%);
+    box-shadow: none;
   }
 
   .app-shell.mobile-screen-connect .preview-drawer,
@@ -1780,21 +1791,57 @@ textarea::-webkit-scrollbar-thumb:hover {
   }
 
   .app-shell.browser-pinned.preview-open .preview-drawer {
-    position: absolute;
+    position: fixed;
+    inset: 0;
     grid-column: auto;
-    right: 0;
-    width: var(--browser-width);
+    width: 100vw;
     max-width: 100vw;
-    height: 100%;
-    box-shadow: -18px 0 42px rgba(0, 0, 0, 0.34);
+    height: 100svh;
+    height: 100dvh;
+    box-shadow: none;
     transform: translateX(0);
   }
 
+  .browser-resize-handle,
+  #pinBrowserBtn {
+    display: none;
+  }
+
+  .mobile-browser-back-button {
+    display: inline-flex;
+  }
+
+  .preview-head {
+    min-height: 48px;
+    padding: 6px 8px;
+  }
+
+  .preview-head > div:first-child {
+    min-width: 0;
+  }
+
+  .preview-head-actions {
+    gap: 5px;
+  }
+
+  .preview-head h2 {
+    font-size: 0.86rem;
+  }
+
+  .preview-head .section-kicker {
+    display: none;
+  }
+
   .preview-reopen-button {
-    top: auto;
+    top: 50%;
     right: 0;
-    bottom: 62px;
-    transform: none;
+    bottom: auto;
+    transform: translateY(-50%);
+  }
+
+  .app-shell.mobile-screen-connect .preview-reopen-button,
+  .app-shell.mobile-screen-sessions .preview-reopen-button {
+    display: none;
   }
 
   .browser-bar {

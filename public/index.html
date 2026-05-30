@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Kitty Remote Deck</title>
-    <link rel="stylesheet" href="/styles.css?v=0.1.0-mobile-composer-enter-1" />
+    <link rel="stylesheet" href="/styles.css?v=0.1.0-browser-root-history-1" />
   </head>
   <body>
     <div class="app-shell" id="appShell">
@@ -241,6 +241,7 @@
               <h2 id="previewTitle">Browser</h2>
             </div>
             <div class="preview-head-actions">
+              <button class="mobile-back-button mobile-browser-back-button" id="mobileBrowserBackBtn" type="button">‹ KT Panel</button>
               <button class="icon-button" id="pinBrowserBtn" type="button" aria-label="固定 Browser" aria-pressed="false">📌</button>
               <button class="icon-button" id="closePreviewBtn" type="button" aria-label="隐藏 Browser">×</button>
             </div>
@@ -294,6 +295,8 @@
       <div class="auth-toast" id="authToast" hidden></div>
     </div>
 
-    <script src="/app.js?v=0.1.0-mobile-composer-enter-1"></script>
+    <script src="/modules/browser-utils.js?v=0.1.0-browser-root-history-1"></script>
+    <script src="/modules/mobile-utils.js?v=0.1.0-browser-root-history-1"></script>
+    <script src="/app.js?v=0.1.0-browser-root-history-1"></script>
   </body>
 </html>

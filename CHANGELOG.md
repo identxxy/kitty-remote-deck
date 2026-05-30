@@ -7,6 +7,11 @@
 - Improved device-token authentication feedback with an initial auth-check screen and authenticated key label/toast.
 - Added mobile Auto Connect for the last selected target, with suppression after returning from Sessions to Connect.
 - Fixed composer Enter handling so newline-only or multiline mobile input is sent as text before the final terminal Enter.
+- Split first-pass frontend helpers into `public/modules/` and improved mobile Browser preview as a full-screen overlay with a KT Panel return action.
+- Fixed mobile Browser history so system Back and `‹ KT Panel` return to the selected pane instead of jumping to the Session list.
+- Moved the mobile Browser reopen tab to the right-side vertical center so it no longer overlaps the bottom composer.
+- Preserved mobile pane output while Browser is open and refresh the selected pane immediately when returning to KT Panel.
+- Reset Browser history when opening a URL from the KT Panel, so root Back returns to the KT Panel and unrelated pane/topic links do not share one Back stack.
 
 ## v0.1.0 - Initial Release
 

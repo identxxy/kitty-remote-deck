@@ -91,11 +91,12 @@ Edit the target in the Connect sidebar if your kitty binary or socket pattern di
 - `Screen` mode shows the current kitty viewport; mouse wheel sends `kitty @ scroll-window` to the selected pane and then refreshes the screen text.
 - `All` mode fetches `get-text --extent all`; mouse wheel scrolls the browser's local scrollback view.
 - When `All` mode is scrolled away from the bottom, automatic full-text refresh pauses to avoid jumping and repeated scrollback transfers. Use `Refresh All` to return to the live tail.
-- Terminal URLs are clickable; clicking one opens the right-side Browser.
+- Terminal URLs are clickable; clicking one opens the right-side Browser as a new root page, so unrelated pane/topic links do not share one Browser Back stack.
 - The Browser address bar accepts `https://`, `http://`, `file://`, bare hostnames such as `example.com`, hostnames with ports such as `localhost:8080`, and absolute target-side paths such as `/tmp/report.html`.
 - When the Browser is not pinned, clicking or focusing elsewhere in the workbench hides it. Pinning keeps it open as a real right-side column that compresses the editor and Input Console instead of overlaying them.
 - On mobile-width screens, the UI becomes a chat-style flow: Connect screen, full-screen Session list, then a full-screen pane conversation with a back button.
 - Mobile pane conversations keep the input composer visible at the bottom. Fit mode wraps terminal text to the phone width; Wide mode preserves terminal columns and allows horizontal scrolling.
+- On mobile, terminal URL clicks open the Browser as a full-screen overlay. Use `‹ KT Panel` or the system Back action to return to the pane, or the floating Browser tab to reopen the last preview.
 - `发送 Esc` sends `escape` to the selected pane, useful for interrupting full-screen or agent UIs.
 - `发送 Ctrl+C` sends `ctrl+c` to the selected pane.
 - `Ctrl+D` sends `ctrl+d` to the selected pane.
@@ -110,9 +111,15 @@ Edit the target in the Connect sidebar if your kitty binary or socket pattern di
 - Status Bar: current connection health, target, socket, pane, and auto-refresh state.
 - Top controls: numeric font size, theme, and resize mode. Resize mode is off by default; enabling it exposes sidebar, Browser, and bottom panel resize handles.
 
+## Frontend Structure
+
+- `public/app.js`: stateful app orchestration, event wiring, session control, and API calls.
+- `public/modules/browser-utils.js`: URL normalization, Browser proxy URL creation, HTML escaping, and terminal URL linkification.
+- `public/modules/mobile-utils.js`: mobile viewport and browser-history helpers.
+
 ## Embedded Browser Proxy
 
-Terminal `http://`, `https://`, and `file://` URLs open in a right-side Browser drawer. The Browser also has URL input, back/forward buttons, and a local history menu. Browser resources are fetched through the active Local or SSH target and proxied back through the local app, including relative HTML/CSS resources and in-frame link navigation.
+Terminal `http://`, `https://`, and `file://` URLs open in a right-side Browser drawer. A terminal click resets the Browser's local URL stack to that clicked page; at that root page, Browser Back returns to the KT Panel. Address-bar navigation and in-frame link navigation then build Back/Forward history inside that preview. Browser resources are fetched through the active Local or SSH target and proxied back through the local app, including relative HTML/CSS resources and in-frame link navigation.
 
 See [docs/url-preview-proxy.md](docs/url-preview-proxy.md) for the proxy flow, security model, and limits.
 

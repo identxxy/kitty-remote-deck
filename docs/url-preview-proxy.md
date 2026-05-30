@@ -14,6 +14,8 @@ Kitty Remote Deck turns `http://`, `https://`, and `file://` URLs in terminal ou
 8. Pin the Browser when it should stay open as a fixed right-side column. Unpinned Browser panels close when another part of the workbench is clicked or focused.
 9. Enable top-bar Resize mode and drag the Browser left border to change its width.
 
+Clicking a terminal URL starts a new Browser root page. Browser Back on that root page returns to the KT Panel. Back/forward history is then scoped to address-bar navigation and in-frame navigation from that root, so URLs opened from different panes or topics do not point Back into each other.
+
 Address bar input is normalized before loading:
 
 - `https://example.com/report.html` stays unchanged.

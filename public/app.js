@@ -1,12 +1,12 @@
 const STORAGE_KEY = "kitty-remote-deck-ui";
 const DEBUG_STORAGE_KEY = "kitty-remote-deck-debug";
-const CLIENT_BUILD = "0.1.0-mobile-composer-enter-1";
+const CLIENT_BUILD = "0.1.0-browser-root-history-1";
 const MOBILE_HISTORY_KEY = "krdMobileScreen";
 const FONT_SIZE_RANGE = { min: 5, max: 18, default: 13 };
 const THEME_SET = new Set(["dark", "graphite", "light"]);
 const TEXT_EXTENT_SET = new Set(["screen", "all"]);
 const MOBILE_TERMINAL_WIDTH_SET = new Set(["fit", "wide"]);
-const MOBILE_SCREEN_SET = new Set(["connect", "sessions", "chat"]);
+const MOBILE_SCREEN_SET = new Set(["connect", "sessions", "chat", "browser"]);
 const SIDEBAR_WIDTH_RANGE = { min: 220, max: 520 };
 const PANEL_HEIGHT_RANGE = { min: 150, max: 420 };
 const BROWSER_WIDTH_RANGE = { min: 320, max: 900, default: 560 };
@@ -16,6 +16,8 @@ const ALL_TEXT_AUTO_REFRESH_EVERY_TICKS = 3;
 const WHEEL_SCROLL_DEBOUNCE_MS = 70;
 const WHEEL_SCROLL_MAX_LINES = 80;
 const MOBILE_AUTO_CONNECT_DELAY_MS = 1000;
+const BROWSER_UTILS = window.KRDBrowserUtils;
+const MOBILE_UTILS = window.KRDMobileUtils;
 
 const DEFAULT_TARGET_FORM = {
   name: "Local Kitty",
@@ -117,6 +119,7 @@ const elements = {
   browserHistorySelect: document.querySelector("#browserHistorySelect"),
   browserGoBtn: document.querySelector("#browserGoBtn"),
   pinBrowserBtn: document.querySelector("#pinBrowserBtn"),
+  mobileBrowserBackBtn: document.querySelector("#mobileBrowserBackBtn"),
   closePreviewBtn: document.querySelector("#closePreviewBtn"),
   reopenPreviewBtn: document.querySelector("#reopenPreviewBtn"),
   urlPreviewFrame: document.querySelector("#urlPreviewFrame"),
@@ -579,12 +582,11 @@ function renderBrowserHistoryOptions() {
 }
 
 function isMobileViewport() {
-  return window.matchMedia("(max-width: 720px)").matches;
+  return MOBILE_UTILS.isMobileViewport();
 }
 
 function getMobileHistoryScreen() {
-  const screen = history.state?.[MOBILE_HISTORY_KEY];
-  return MOBILE_SCREEN_SET.has(screen) ? screen : "";
+  return MOBILE_UTILS.getHistoryScreen(history.state, MOBILE_HISTORY_KEY, MOBILE_SCREEN_SET);
 }
 
 function syncMobileHistory(screen, mode = "push") {
@@ -592,28 +594,21 @@ function syncMobileHistory(screen, mode = "push") {
     return;
   }
 
-  const nextScreen = MOBILE_SCREEN_SET.has(screen) ? screen : "connect";
-  const currentScreen = getMobileHistoryScreen();
-  const nextState = {
-    ...(history.state || {}),
-    [MOBILE_HISTORY_KEY]: nextScreen
-  };
-
-  if (mode === "replace" || !currentScreen) {
-    history.replaceState(nextState, "", window.location.href);
-    return;
-  }
-
-  if (currentScreen !== nextScreen) {
-    history.pushState(nextState, "", window.location.href);
-  }
+  MOBILE_UTILS.syncHistory({
+    screen,
+    mode,
+    key: MOBILE_HISTORY_KEY,
+    allowedScreens: MOBILE_SCREEN_SET,
+    historyObject: history,
+    href: window.location.href
+  });
 }
 
 function setMobileScreen(screen, options = {}) {
   const nextScreen = MOBILE_SCREEN_SET.has(screen) ? screen : "connect";
   state.mobileScreen = nextScreen;
 
-  if (isMobileViewport() && nextScreen !== "chat") {
+  if (isMobileViewport() && ["connect", "sessions"].includes(nextScreen)) {
     state.previewVisible = false;
     state.previewPinned = false;
   }
@@ -696,6 +691,22 @@ function handleMobileBack(targetScreen) {
   setMobileScreen(targetScreen, { history: "replace" });
 }
 
+function refreshPaneAfterMobileReturn() {
+  if (
+    !isMobileViewport() ||
+    state.mobileScreen !== "chat" ||
+    !state.selectedTargetId ||
+    !state.selectedWindowId
+  ) {
+    return;
+  }
+
+  refreshScreen({
+    force: true,
+    scrollToBottom: state.screenExtent === "all" && state.allTextFollowTail
+  }).catch((error) => setStatus(error.message, "danger"));
+}
+
 function handleMobileHistoryChange(event) {
   if (!isMobileViewport()) {
     return;
@@ -708,7 +719,21 @@ function handleMobileHistoryChange(event) {
     cancelMobileAutoConnect({ suppress: true });
   }
 
+  if (nextScreen === "browser") {
+    state.previewVisible = Boolean(state.previewUrl);
+    setMobileScreen("browser", { history: false });
+    syncPreviewFrame();
+    return;
+  }
+
+  if (state.previewVisible && nextScreen === "chat") {
+    state.previewVisible = false;
+  }
+
   setMobileScreen(nextScreen, { history: false });
+  if (nextScreen === "chat") {
+    refreshPaneAfterMobileReturn();
+  }
 }
 
 function applyUiState() {
@@ -731,6 +756,7 @@ function applyUiState() {
   elements.appShell.classList.toggle("mobile-screen-connect", state.mobileScreen === "connect");
   elements.appShell.classList.toggle("mobile-screen-sessions", state.mobileScreen === "sessions");
   elements.appShell.classList.toggle("mobile-screen-chat", state.mobileScreen === "chat");
+  elements.appShell.classList.toggle("mobile-screen-browser", state.mobileScreen === "browser");
   elements.appShell.classList.toggle("mobile-terminal-wide", state.mobileTerminalWidth === "wide");
   elements.showSshViewBtn.classList.toggle("active", state.sidebarVisible && showingSsh);
   elements.showSessionsViewBtn.classList.toggle("active", state.sidebarVisible && showingSessions);
@@ -740,7 +766,7 @@ function applyUiState() {
   elements.previewDrawer.setAttribute("aria-hidden", String(!state.previewVisible));
   elements.reopenPreviewBtn.hidden = state.previewVisible || !state.previewUrl;
   elements.reopenPreviewBtn.setAttribute("aria-hidden", String(state.previewVisible || !state.previewUrl));
-  elements.browserBackBtn.disabled = state.previewHistoryIndex <= 0;
+  elements.browserBackBtn.disabled = state.previewHistoryIndex < 0;
   elements.browserForwardBtn.disabled = state.previewHistoryIndex < 0 || state.previewHistoryIndex >= state.previewHistory.length - 1;
   elements.browserGoBtn.disabled = !state.selectedTargetId;
   elements.pinBrowserBtn.classList.toggle("active", state.previewPinned);
@@ -799,42 +825,22 @@ function setPreviewStatus(message, mode) {
 }
 
 function createPreviewResourceUrl(url, targetId) {
-  const params = new URLSearchParams({
-    targetId,
-    url
-  });
-  return `/api/url-resource?${params.toString()}`;
+  return BROWSER_UTILS.createPreviewResourceUrl(url, targetId);
 }
 
 function normalizeBrowserUrl(rawUrl) {
-  const value = String(rawUrl || "").trim();
-
-  if (!value) {
-    throw new Error("URL 为空。");
-  }
-
-  const schemeMatch = value.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/);
-  if (schemeMatch) {
-    if (/^[A-Za-z0-9.-]+:\d+(?:[/?#].*)?$/.test(value)) {
-      return new URL(`https://${value}`).href;
-    }
-
-    const parsed = new URL(value);
-    if (!["http:", "https:", "file:"].includes(parsed.protocol)) {
-      throw new Error("只支持 http://, https:// 和 file:// URL。");
-    }
-    return parsed.href;
-  }
-
-  if (value.startsWith("/")) {
-    return new URL(`file://${value}`).href;
-  }
-
-  return new URL(`https://${value}`).href;
+  return BROWSER_UTILS.normalizeBrowserUrl(rawUrl);
 }
 
 function rememberPreviewUrl(url, mode = "push") {
   if (mode === "none") {
+    return;
+  }
+
+  if (mode === "reset") {
+    state.previewHistory = [url];
+    state.previewHistoryIndex = 0;
+    state.previewUrl = url;
     return;
   }
 
@@ -1450,8 +1456,17 @@ function renderViewerMeta() {
 }
 
 function closePreview() {
+  if (isMobileViewport() && state.previewVisible && getMobileHistoryScreen() === "browser") {
+    history.back();
+    return;
+  }
+
   state.previewVisible = false;
+  if (isMobileViewport() && state.mobileScreen === "browser") {
+    state.mobileScreen = "chat";
+  }
   applyUiState();
+  refreshPaneAfterMobileReturn();
 }
 
 function toggleBrowserPin() {
@@ -1470,11 +1485,16 @@ function reopenPreview() {
 
   state.previewVisible = true;
   syncPreviewFrame();
+  if (isMobileViewport() && state.mobileScreen === "chat") {
+    setMobileScreen("browser");
+    return;
+  }
   applyUiState();
 }
 
 function goBackPreview() {
   if (state.previewHistoryIndex <= 0) {
+    closePreview();
     return;
   }
 
@@ -1482,6 +1502,10 @@ function goBackPreview() {
   state.previewUrl = state.previewHistory[state.previewHistoryIndex] || "";
   state.previewVisible = true;
   syncPreviewFrame();
+  if (isMobileViewport() && state.mobileScreen === "chat") {
+    setMobileScreen("browser");
+    return;
+  }
   applyUiState();
 }
 
@@ -1494,6 +1518,10 @@ function goForwardPreview() {
   state.previewUrl = state.previewHistory[state.previewHistoryIndex] || "";
   state.previewVisible = true;
   syncPreviewFrame();
+  if (isMobileViewport() && state.mobileScreen === "chat") {
+    setMobileScreen("browser");
+    return;
+  }
   applyUiState();
 }
 
@@ -1507,6 +1535,10 @@ function jumpPreviewHistory(index) {
   state.previewUrl = state.previewHistory[nextIndex] || "";
   state.previewVisible = true;
   syncPreviewFrame();
+  if (isMobileViewport() && state.mobileScreen === "chat") {
+    setMobileScreen("browser");
+    return;
+  }
   applyUiState();
 }
 
@@ -1523,6 +1555,11 @@ async function loadUrlPreview(rawUrl, options = {}) {
   rememberPreviewUrl(url, options.history || "push");
   state.previewVisible = true;
   syncPreviewFrame();
+  if (isMobileViewport() && state.mobileScreen === "chat") {
+    setMobileScreen("browser");
+    setPreviewStatus(`正在通过 ${target.name} 打开 ${url}`, "neutral");
+    return;
+  }
   applyUiState();
   setPreviewStatus(`正在通过 ${target.name} 打开 ${url}`, "neutral");
 }
@@ -1541,7 +1578,11 @@ function maybeCloseUnpinnedBrowser(event) {
   }
 
   state.previewVisible = false;
+  if (isMobileViewport() && state.mobileScreen === "browser") {
+    state.mobileScreen = "chat";
+  }
   applyUiState();
+  refreshPaneAfterMobileReturn();
 }
 
 function handleBrowserMessage(event) {
@@ -1744,7 +1785,7 @@ async function loadSessions(options = {}) {
       state.screenText = "";
       elements.screenOutput.textContent = "当前 pane 已变化，点击 Refresh 更新内容。";
     }
-  } else {
+  } else if (!state.selectedWindowId) {
     elements.screenOutput.textContent = deferPaneRefresh
       ? "选择一个 Session 后再加载 pane 内容。"
       : "当前没有可显示的 pane。";
@@ -2074,47 +2115,19 @@ async function runAutoRefreshTick() {
 }
 
 function escapeHtml(text) {
-  return String(text)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+  return BROWSER_UTILS.escapeHtml(text);
 }
 
 function escapeAttribute(text) {
-  return escapeHtml(text).replace(/'/g, "&#39;");
+  return BROWSER_UTILS.escapeAttribute(text);
 }
 
 function trimUrlPunctuation(url) {
-  let clean = url;
-  let trailing = "";
-
-  while (/[.,;!?)]$/.test(clean)) {
-    trailing = clean.slice(-1) + trailing;
-    clean = clean.slice(0, -1);
-  }
-
-  return { clean, trailing };
+  return BROWSER_UTILS.trimUrlPunctuation(url);
 }
 
 function linkifyTerminalText(text) {
-  const pattern = /\b(?:https?:\/\/|file:\/\/)[^\s<>"']+/gi;
-  let cursor = 0;
-  let html = "";
-
-  for (const match of String(text).matchAll(pattern)) {
-    const rawUrl = match[0];
-    const start = match.index || 0;
-    const { clean, trailing } = trimUrlPunctuation(rawUrl);
-
-    html += escapeHtml(String(text).slice(cursor, start));
-    html += `<a class="terminal-link" href="${escapeAttribute(clean)}" data-preview-url="${escapeAttribute(clean)}">${escapeHtml(clean)}</a>`;
-    html += escapeHtml(trailing);
-    cursor = start + rawUrl.length;
-  }
-
-  html += escapeHtml(String(text).slice(cursor));
-  return html;
+  return BROWSER_UTILS.linkifyTerminalText(text);
 }
 
 function attachWheelContainment() {
@@ -2437,13 +2450,14 @@ function attachEvents() {
     event.preventDefault();
 
     try {
-      await loadUrlPreview(link.dataset.previewUrl);
+      await loadUrlPreview(link.dataset.previewUrl, { history: "reset" });
     } catch (error) {
       setPreviewStatus(error.message, "danger");
     }
   });
 
   elements.closePreviewBtn.addEventListener("click", closePreview);
+  elements.mobileBrowserBackBtn.addEventListener("click", closePreview);
   elements.reopenPreviewBtn.addEventListener("click", reopenPreview);
   elements.pinBrowserBtn.addEventListener("click", toggleBrowserPin);
   elements.browserBackBtn.addEventListener("click", goBackPreview);

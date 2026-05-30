@@ -294,6 +294,92 @@ async function runMobileChatViewport(client, width, height, label) {
         selectedPane: state.selectedWindowId
       };
 
+      state.targets = [{ id: 'local', name: 'Local Kitty' }];
+      state.selectedTargetId = 'local';
+      document.querySelector('#screenOutput [data-preview-url]').click();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const browserRect = document.querySelector('#previewDrawer').getBoundingClientRect();
+      const mobileBrowserPreview = {
+        mobileScreen: state.mobileScreen,
+        historyScreen: history.state?.krdMobileScreen || '',
+        previewOpen: shell.classList.contains('preview-open'),
+        frameSrc: document.querySelector('#urlPreviewFrame').getAttribute('src'),
+        drawerDisplay: display('#previewDrawer'),
+        drawer: {
+          width: Math.round(browserRect.width),
+          height: Math.round(browserRect.height),
+          top: Math.round(browserRect.top),
+          bottom: Math.round(browserRect.bottom)
+        },
+        backButtonDisplay: display('#mobileBrowserBackBtn'),
+        pinDisplay: display('#pinBrowserBtn'),
+        resizeHandleDisplay: display('#browserResizeHandle'),
+        editorDisplay: display('.editor-region'),
+        browserClass: shell.classList.contains('mobile-screen-browser'),
+        reopenHiddenWhileOpen: document.querySelector('#reopenPreviewBtn').hidden,
+        browserBackDisabled: document.querySelector('#browserBackBtn').disabled,
+        previewHistory: state.previewHistory.slice()
+      };
+
+      const originalBrowserApiFetch = apiFetch;
+      let mobileBrowserPaneRefreshes = 0;
+      apiFetch = async (url, options = {}) => {
+        const href = String(url);
+        if (href.startsWith('/api/sessions?')) {
+          return { tree: state.sessionTree, selectedSocket: state.selectedSocket || '', sockets: [] };
+        }
+        if (href.startsWith('/api/screen?')) {
+          mobileBrowserPaneRefreshes += 1;
+          return { text: 'line 1\\\\nline 2 https://example.com/mobile.html\\\\nrefreshed after browser' };
+        }
+        return originalBrowserApiFetch(url, options);
+      };
+      await loadSessions({ refreshPane: false });
+      const mobileBrowserAfterDeferredSessionRefresh = {
+        screenText: document.querySelector('#screenOutput').textContent,
+        selectedPane: state.selectedWindowId
+      };
+
+      history.back();
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const mobileBrowserAfterSystemBack = {
+        mobileScreen: state.mobileScreen,
+        historyScreen: history.state?.krdMobileScreen || '',
+        previewOpen: shell.classList.contains('preview-open'),
+        editorDisplay: display('.editor-region'),
+        chatClass: shell.classList.contains('mobile-screen-chat'),
+        reopenHidden: document.querySelector('#reopenPreviewBtn').hidden,
+        reopen: rect('#reopenPreviewBtn'),
+        input: rect('#sendTextInput'),
+        screenText: document.querySelector('#screenOutput').textContent,
+        paneRefreshes: mobileBrowserPaneRefreshes
+      };
+      document.querySelector('#reopenPreviewBtn').click();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const mobileBrowserReopened = {
+        mobileScreen: state.mobileScreen,
+        historyScreen: history.state?.krdMobileScreen || '',
+        previewOpen: shell.classList.contains('preview-open'),
+        frameSrc: document.querySelector('#urlPreviewFrame').getAttribute('src'),
+        drawerDisplay: display('#previewDrawer')
+      };
+      document.querySelector('#mobileBrowserBackBtn').click();
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const mobileBrowserAfterButtonBack = {
+        mobileScreen: state.mobileScreen,
+        historyScreen: history.state?.krdMobileScreen || '',
+        previewOpen: shell.classList.contains('preview-open'),
+        editorDisplay: display('.editor-region'),
+        chatClass: shell.classList.contains('mobile-screen-chat'),
+        reopenHidden: document.querySelector('#reopenPreviewBtn').hidden,
+        reopen: rect('#reopenPreviewBtn'),
+        input: rect('#sendTextInput'),
+        screenText: document.querySelector('#screenOutput').textContent,
+        paneRefreshes: mobileBrowserPaneRefreshes
+      };
+      apiFetch = originalBrowserApiFetch;
+      state.selectedTargetId = '';
+
       document.querySelector('#mobileTerminalWidthBtn').click();
       const wide = {
         classEnabled: shell.classList.contains('mobile-terminal-wide'),
@@ -420,6 +506,11 @@ async function runMobileChatViewport(client, width, height, label) {
         initial,
         sessions,
         chatBeforeWide,
+        mobileBrowserPreview,
+        mobileBrowserAfterDeferredSessionRefresh,
+        mobileBrowserAfterSystemBack,
+        mobileBrowserReopened,
+        mobileBrowserAfterButtonBack,
         wide,
         historyBeforeBrowserBack,
         afterBrowserBack,
@@ -576,6 +667,54 @@ async function runMobileChatViewport(client, width, height, label) {
     mobileFlow.chatBeforeWide.backToSessionsDisplay === "none" ||
     mobileFlow.chatBeforeWide.selectedPane !== 2345 ||
     !mobileFlow.chatBeforeWide.terminalLinks.includes("https://example.com/mobile.html") ||
+    mobileFlow.mobileBrowserPreview.previewOpen !== true ||
+    !mobileFlow.mobileBrowserPreview.frameSrc.includes("https%3A%2F%2Fexample.com%2Fmobile.html") ||
+    mobileFlow.mobileBrowserPreview.drawerDisplay !== "grid" ||
+    mobileFlow.mobileBrowserPreview.drawer.width < width - 4 ||
+    mobileFlow.mobileBrowserPreview.drawer.height < height - 4 ||
+    mobileFlow.mobileBrowserPreview.backButtonDisplay === "none" ||
+    mobileFlow.mobileBrowserPreview.pinDisplay !== "none" ||
+    mobileFlow.mobileBrowserPreview.resizeHandleDisplay !== "none" ||
+    mobileFlow.mobileBrowserPreview.editorDisplay !== "grid" ||
+    mobileFlow.mobileBrowserPreview.mobileScreen !== "browser" ||
+    mobileFlow.mobileBrowserPreview.historyScreen !== "browser" ||
+    mobileFlow.mobileBrowserPreview.browserClass !== true ||
+    mobileFlow.mobileBrowserPreview.reopenHiddenWhileOpen !== true ||
+    mobileFlow.mobileBrowserPreview.browserBackDisabled !== false ||
+    mobileFlow.mobileBrowserPreview.previewHistory.length !== 1 ||
+    mobileFlow.mobileBrowserPreview.previewHistory[0] !== "https://example.com/mobile.html" ||
+    !mobileFlow.mobileBrowserAfterDeferredSessionRefresh.screenText.includes("line 2") ||
+    mobileFlow.mobileBrowserAfterDeferredSessionRefresh.screenText.includes("选择一个 Session") ||
+    mobileFlow.mobileBrowserAfterDeferredSessionRefresh.selectedPane !== 2345 ||
+    mobileFlow.mobileBrowserAfterSystemBack.mobileScreen !== "chat" ||
+    mobileFlow.mobileBrowserAfterSystemBack.historyScreen !== "chat" ||
+    mobileFlow.mobileBrowserAfterSystemBack.previewOpen !== false ||
+    mobileFlow.mobileBrowserAfterSystemBack.editorDisplay !== "grid" ||
+    mobileFlow.mobileBrowserAfterSystemBack.chatClass !== true ||
+    mobileFlow.mobileBrowserAfterSystemBack.reopenHidden !== false ||
+    !mobileFlow.mobileBrowserAfterSystemBack.screenText.includes("refreshed after browser") ||
+    mobileFlow.mobileBrowserAfterSystemBack.paneRefreshes < 1 ||
+    Math.abs(
+      (mobileFlow.mobileBrowserAfterSystemBack.reopen.top + mobileFlow.mobileBrowserAfterSystemBack.reopen.bottom) / 2 - height / 2
+    ) > height * 0.08 ||
+    mobileFlow.mobileBrowserAfterSystemBack.reopen.bottom >= mobileFlow.mobileBrowserAfterSystemBack.input.top ||
+    mobileFlow.mobileBrowserReopened.previewOpen !== true ||
+    mobileFlow.mobileBrowserReopened.mobileScreen !== "browser" ||
+    mobileFlow.mobileBrowserReopened.historyScreen !== "browser" ||
+    !mobileFlow.mobileBrowserReopened.frameSrc.includes("https%3A%2F%2Fexample.com%2Fmobile.html") ||
+    mobileFlow.mobileBrowserReopened.drawerDisplay !== "grid" ||
+    mobileFlow.mobileBrowserAfterButtonBack.mobileScreen !== "chat" ||
+    mobileFlow.mobileBrowserAfterButtonBack.historyScreen !== "chat" ||
+    mobileFlow.mobileBrowserAfterButtonBack.previewOpen !== false ||
+    mobileFlow.mobileBrowserAfterButtonBack.editorDisplay !== "grid" ||
+    mobileFlow.mobileBrowserAfterButtonBack.chatClass !== true ||
+    mobileFlow.mobileBrowserAfterButtonBack.reopenHidden !== false ||
+    !mobileFlow.mobileBrowserAfterButtonBack.screenText.includes("refreshed after browser") ||
+    mobileFlow.mobileBrowserAfterButtonBack.paneRefreshes < 2 ||
+    Math.abs(
+      (mobileFlow.mobileBrowserAfterButtonBack.reopen.top + mobileFlow.mobileBrowserAfterButtonBack.reopen.bottom) / 2 - height / 2
+    ) > height * 0.08 ||
+    mobileFlow.mobileBrowserAfterButtonBack.reopen.bottom >= mobileFlow.mobileBrowserAfterButtonBack.input.top ||
     mobileFlow.wide.classEnabled !== true ||
     mobileFlow.wide.whiteSpace !== "pre" ||
     mobileFlow.wide.buttonText !== "Wide" ||
@@ -776,6 +915,18 @@ async function runViewport(client, width, height, label) {
     `(async () => {
       state.targets = [{ id: 'local', name: 'Local Kitty' }];
       state.selectedTargetId = 'local';
+      state.previewHistory = ['file:///tmp/old-topic.html'];
+      state.previewHistoryIndex = 0;
+      state.previewUrl = 'file:///tmp/old-topic.html';
+      document.querySelector('#screenOutput [data-preview-url]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const terminalRootHistory = {
+        previewHistory: state.previewHistory.slice(),
+        backDisabled: document.querySelector('#browserBackBtn').disabled
+      };
+      document.querySelector('#browserBackBtn').click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      terminalRootHistory.rootBackClosed = !document.querySelector('#appShell').classList.contains('preview-open');
       await loadUrlPreview('file:///tmp/krd-report.html');
       await loadUrlPreview('/tmp/krd-second.html');
       const opened = {
@@ -786,7 +937,8 @@ async function runViewport(client, width, height, label) {
         addressInput: document.querySelector('#browserAddressInput').value,
         backEnabledAfterSecondUrl: document.querySelector('#browserBackBtn').disabled === false,
         forwardDisabledAfterSecondUrl: document.querySelector('#browserForwardBtn').disabled === true,
-        historyCountAfterSecondUrl: document.querySelector('#browserHistorySelect').options.length
+        historyCountAfterSecondUrl: document.querySelector('#browserHistorySelect').options.length,
+        terminalRootHistory
       };
       document.querySelector('#browserBackBtn').click();
       opened.backFrameSrc = document.querySelector('#urlPreviewFrame').getAttribute('src');
@@ -796,7 +948,7 @@ async function runViewport(client, width, height, label) {
       opened.forwardFrameSrc = document.querySelector('#urlPreviewFrame').getAttribute('src');
       opened.forwardAddressInput = document.querySelector('#browserAddressInput').value;
       const history = document.querySelector('#browserHistorySelect');
-      history.value = '0';
+      history.value = '1';
       history.dispatchEvent(new Event('change', { bubbles: true }));
       opened.historyJumpInput = document.querySelector('#browserAddressInput').value;
       handleBrowserMessage({
@@ -958,6 +1110,10 @@ async function runViewport(client, width, height, label) {
     !metrics.previewDrawerWorked.frameSrc.includes("/api/url-resource?") ||
     !metrics.previewDrawerWorked.frameSrc.includes("file%3A%2F%2F%2Ftmp%2Fkrd-second.html") ||
     metrics.previewDrawerWorked.addressInput !== "file:///tmp/krd-second.html" ||
+    metrics.previewDrawerWorked.terminalRootHistory.previewHistory.length !== 1 ||
+    metrics.previewDrawerWorked.terminalRootHistory.previewHistory[0] !== "https://example.com/report.html" ||
+    metrics.previewDrawerWorked.terminalRootHistory.backDisabled !== false ||
+    metrics.previewDrawerWorked.terminalRootHistory.rootBackClosed !== true ||
     metrics.previewDrawerWorked.backEnabledAfterSecondUrl !== true ||
     metrics.previewDrawerWorked.forwardDisabledAfterSecondUrl !== true ||
     metrics.previewDrawerWorked.historyCountAfterSecondUrl < 3 ||
@@ -1005,7 +1161,7 @@ try {
 
   chrome.stderr.on("data", (chunk) => {
     const text = chunk.toString("utf8");
-    if (/ERROR/i.test(text) && !/dbus|ssl_client_socket|SharedImageManager::ProduceMemory/i.test(text)) {
+    if (/ERROR/i.test(text) && !/dbus|ssl_client_socket|SharedImageManager::ProduceMemory|DEPRECATED_ENDPOINT|google_apis\/gcm/i.test(text)) {
       issues.push(text.trim());
     }
   });
