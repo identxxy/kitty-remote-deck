@@ -38,7 +38,7 @@ test("device tokens are stored as hashes and verify by raw token", async () => {
   });
 });
 
-test("a new login replaces the previous active session for the same device token", async () => {
+test("a device token can keep multiple active browser sessions", async () => {
   await withAuthManager(async (manager) => {
     const created = await createDeviceToken(manager, "iPad");
 
@@ -46,10 +46,11 @@ test("a new login replaces the previous active session for the same device token
     const second = await verifyDeviceToken(manager, created.token);
 
     assert.notEqual(first.sessionCookie, second.sessionCookie);
-    assert.equal(await authenticateSession(manager, first.sessionCookie), null);
+    assert.equal((await authenticateSession(manager, first.sessionCookie)).device.label, "iPad");
 
     const authenticated = await authenticateSession(manager, second.sessionCookie);
     assert.equal(authenticated.device.label, "iPad");
+    assert.equal(authenticated.device.activeSessionCount, 2);
   });
 });
 

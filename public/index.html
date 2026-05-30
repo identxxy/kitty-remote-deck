@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Kitty Remote Deck</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=0.1.0-mobile-composer-enter-1" />
   </head>
   <body>
     <div class="app-shell" id="appShell">
@@ -65,6 +65,7 @@
         <aside class="primary-sidebar" id="primarySidebar">
           <section class="sidebar-view" id="sessionsSidebarView" hidden>
             <div class="sidebar-head">
+              <button class="mobile-back-button" id="mobileBackToConnectBtn" type="button">‹ Connect</button>
               <div>
                 <p class="section-kicker">KT Sessions</p>
                 <h2>Session Explorer</h2>
@@ -99,6 +100,7 @@
                 <select id="targetSelect"></select>
               </label>
               <div class="summary-actions">
+                <button class="primary-button mobile-connect-button" id="mobileConnectTargetBtn" type="button">Connect</button>
                 <button class="secondary-button" id="testTargetBtn" type="button">Test</button>
                 <button class="ghost-button" id="newTargetBtn" type="button">New</button>
               </div>
@@ -179,8 +181,11 @@
         <div class="resize-handle sidebar-resize-handle" id="sidebarResizeHandle" role="separator" aria-orientation="vertical"></div>
 
         <main class="editor-region">
+          <nav class="mobile-pane-switcher" id="mobilePaneSwitcher" aria-label="Mobile pane switcher" hidden></nav>
+
           <section class="editor-pane" id="editorPane">
             <div class="editor-toolbar">
+              <button class="mobile-back-button" id="mobileBackToSessionsBtn" type="button">‹ Sessions</button>
               <div class="editor-tab" id="viewerMeta">
                 选中一个 pane 后，这里会显示它的标题、目录和当前前台进程。
               </div>
@@ -189,6 +194,7 @@
                   <button class="mode-button active" id="screenModeBtn" type="button" aria-pressed="true">Screen</button>
                   <button class="mode-button" id="allTextModeBtn" type="button" aria-pressed="false">All</button>
                 </div>
+                <button class="mode-button mobile-width-button" id="mobileTerminalWidthBtn" type="button" aria-pressed="false">Fit</button>
                 <button class="ghost-button compact-editor-button" id="refreshTextBtn" type="button">Refresh</button>
                 <label class="toggle">
                   <input id="autoRefreshToggle" type="checkbox" checked />
@@ -202,7 +208,7 @@
 
           <div class="resize-handle panel-resize-handle" id="panelResizeHandle" role="separator" aria-orientation="horizontal"></div>
 
-          <section class="bottom-panel">
+          <section class="bottom-panel" id="bottomPanel">
             <div class="panel-head compact-panel-head">
               <p class="section-kicker">Input Console</p>
               <div class="panel-mini-actions">
@@ -270,22 +276,24 @@
         </div>
       </footer>
 
-      <section class="auth-gate" id="authGate" hidden>
+      <section class="auth-gate" id="authGate">
         <form class="auth-card" id="authForm">
           <div>
             <p class="section-kicker">Device Access</p>
             <h2>Kitty Remote Deck</h2>
+            <p class="auth-subtitle" id="authDeviceMeta">正在检查已保存的登录状态。</p>
           </div>
           <label>
             <span>Device Token</span>
             <input id="authTokenInput" type="password" autocomplete="current-password" spellcheck="false" required />
           </label>
           <button class="primary-button" type="submit">Sign In</button>
-          <p class="auth-status" id="authStatusText">请输入这台设备对应的 token。</p>
+          <p class="auth-status" id="authStatusText">正在认证…</p>
         </form>
       </section>
+      <div class="auth-toast" id="authToast" hidden></div>
     </div>
 
-    <script src="/app.js"></script>
+    <script src="/app.js?v=0.1.0-mobile-composer-enter-1"></script>
   </body>
 </html>

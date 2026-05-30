@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Added a mobile chat-style flow: Connect screen, full-screen Session list, full-screen pane conversation, visible bottom composer, and Fit/Wide terminal text modes.
+- Allowed one device token to keep multiple active browser sessions, so mobile and desktop-mode tabs from the same device do not invalidate each other.
+- Improved device-token authentication feedback with an initial auth-check screen and authenticated key label/toast.
+- Added mobile Auto Connect for the last selected target, with suppression after returning from Sessions to Connect.
+- Fixed composer Enter handling so newline-only or multiline mobile input is sent as text before the final terminal Enter.
+
 ## v0.1.0 - Initial Release
 
 - Added local and SSH kitty target control.

@@ -52,7 +52,7 @@ All target/session/control APIs require a device session. Create one token per d
 node scripts/auth-admin.js create-device "iPhone"
 ```
 
-The raw token is shown once. The server stores only a salted hash in `data/auth.json`, which is ignored by Git. A new login with the same token replaces the previous active session for that token, so one device token has one active browser session at a time.
+The raw token is shown once. The server stores only a salted hash in `data/auth.json`, which is ignored by Git. One token represents one device; the same token may keep multiple active browser sessions so normal tabs, mobile views, and desktop-mode tabs on the same phone do not kick each other out.
 
 Useful local admin commands:
 
@@ -85,15 +85,17 @@ Edit the target in the Connect sidebar if your kitty binary or socket pattern di
 
 ## Keyboard Workflow
 
-- `Enter` in the composer sends text when the textbox has content.
+- `Enter` in the composer sends text and a final terminal `Enter` when the textbox has content, including whitespace or newline-only content.
 - `Enter` in an empty composer sends `Enter` to the selected pane.
-- `Shift+Enter` inserts a newline in the composer.
+- `Shift+Enter`, or a mobile keyboard action that inserts a newline, keeps that newline in the composer.
 - `Screen` mode shows the current kitty viewport; mouse wheel sends `kitty @ scroll-window` to the selected pane and then refreshes the screen text.
 - `All` mode fetches `get-text --extent all`; mouse wheel scrolls the browser's local scrollback view.
 - When `All` mode is scrolled away from the bottom, automatic full-text refresh pauses to avoid jumping and repeated scrollback transfers. Use `Refresh All` to return to the live tail.
 - Terminal URLs are clickable; clicking one opens the right-side Browser.
 - The Browser address bar accepts `https://`, `http://`, `file://`, bare hostnames such as `example.com`, hostnames with ports such as `localhost:8080`, and absolute target-side paths such as `/tmp/report.html`.
 - When the Browser is not pinned, clicking or focusing elsewhere in the workbench hides it. Pinning keeps it open as a real right-side column that compresses the editor and Input Console instead of overlaying them.
+- On mobile-width screens, the UI becomes a chat-style flow: Connect screen, full-screen Session list, then a full-screen pane conversation with a back button.
+- Mobile pane conversations keep the input composer visible at the bottom. Fit mode wraps terminal text to the phone width; Wide mode preserves terminal columns and allows horizontal scrolling.
 - `发送 Esc` sends `escape` to the selected pane, useful for interrupting full-screen or agent UIs.
 - `发送 Ctrl+C` sends `ctrl+c` to the selected pane.
 - `Ctrl+D` sends `ctrl+d` to the selected pane.
@@ -135,7 +137,13 @@ python -m py_compile server/remote_helper.py
 curl http://localhost:3040/api/health
 ```
 
-Session/control endpoints require device-token login; use the browser UI for authenticated smoke tests.
+Run the browser layout smoke test with Chrome or Chromium installed:
+
+```bash
+npm run smoke:chrome
+```
+
+Set `CHROME_BIN=/path/to/chrome` if Chrome is not in a common Linux path. Session/control endpoints require device-token login; use the browser UI for authenticated manual checks.
 
 ## Versioning
 

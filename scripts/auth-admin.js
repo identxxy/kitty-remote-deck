@@ -26,7 +26,10 @@ Auth file:
 
 function printDevice(device) {
   const status = device.revokedAt ? "revoked" : "active";
-  const activeSession = device.activeSessionExpiresAt ? `session until ${device.activeSessionExpiresAt}` : "no active session";
+  const sessionCount = Number(device.activeSessionCount || 0);
+  const activeSession = sessionCount
+    ? `${sessionCount} session${sessionCount === 1 ? "" : "s"} until ${device.activeSessionExpiresAt}`
+    : "no active session";
   console.log(`${device.id}\t${status}\t${device.label}\t${device.tokenPreview || "-"}\t${activeSession}`);
 }
 

@@ -1,7 +1,12 @@
 const STORAGE_KEY = "kitty-remote-deck-ui";
+const DEBUG_STORAGE_KEY = "kitty-remote-deck-debug";
+const CLIENT_BUILD = "0.1.0-mobile-composer-enter-1";
+const MOBILE_HISTORY_KEY = "krdMobileScreen";
 const FONT_SIZE_RANGE = { min: 5, max: 18, default: 13 };
 const THEME_SET = new Set(["dark", "graphite", "light"]);
 const TEXT_EXTENT_SET = new Set(["screen", "all"]);
+const MOBILE_TERMINAL_WIDTH_SET = new Set(["fit", "wide"]);
+const MOBILE_SCREEN_SET = new Set(["connect", "sessions", "chat"]);
 const SIDEBAR_WIDTH_RANGE = { min: 220, max: 520 };
 const PANEL_HEIGHT_RANGE = { min: 150, max: 420 };
 const BROWSER_WIDTH_RANGE = { min: 320, max: 900, default: 560 };
@@ -10,6 +15,7 @@ const SESSION_TREE_REFRESH_EVERY_TICKS = 3;
 const ALL_TEXT_AUTO_REFRESH_EVERY_TICKS = 3;
 const WHEEL_SCROLL_DEBOUNCE_MS = 70;
 const WHEEL_SCROLL_MAX_LINES = 80;
+const MOBILE_AUTO_CONNECT_DELAY_MS = 1000;
 
 const DEFAULT_TARGET_FORM = {
   name: "Local Kitty",
@@ -45,6 +51,8 @@ const state = {
   previewUrl: "",
   previewHistory: [],
   previewHistoryIndex: -1,
+  mobileScreen: "connect",
+  mobileTerminalWidth: "fit",
   resizeEnabled: false,
   sidebarWidth: 320,
   browserWidth: BROWSER_WIDTH_RANGE.default,
@@ -57,10 +65,13 @@ const elements = {
   authForm: document.querySelector("#authForm"),
   authTokenInput: document.querySelector("#authTokenInput"),
   authStatusText: document.querySelector("#authStatusText"),
+  authDeviceMeta: document.querySelector("#authDeviceMeta"),
+  authToast: document.querySelector("#authToast"),
   authDeviceLabel: document.querySelector("#authDeviceLabel"),
   logoutBtn: document.querySelector("#logoutBtn"),
   showSshViewBtn: document.querySelector("#showSshViewBtn"),
   showSessionsViewBtn: document.querySelector("#showSessionsViewBtn"),
+  primarySidebar: document.querySelector("#primarySidebar"),
   sshSidebarView: document.querySelector("#sshSidebarView"),
   sessionsSidebarView: document.querySelector("#sessionsSidebarView"),
   sidebarResizeHandle: document.querySelector("#sidebarResizeHandle"),
@@ -88,6 +99,11 @@ const elements = {
   socketSelect: document.querySelector("#socketSelect"),
   sessionSummary: document.querySelector("#sessionSummary"),
   sessionTree: document.querySelector("#sessionTree"),
+  mobilePaneSwitcher: document.querySelector("#mobilePaneSwitcher"),
+  mobileBackToConnectBtn: document.querySelector("#mobileBackToConnectBtn"),
+  mobileBackToSessionsBtn: document.querySelector("#mobileBackToSessionsBtn"),
+  mobileConnectTargetBtn: document.querySelector("#mobileConnectTargetBtn"),
+  mobileTerminalWidthBtn: document.querySelector("#mobileTerminalWidthBtn"),
   editorPane: document.querySelector("#editorPane"),
   viewerMeta: document.querySelector("#viewerMeta"),
   screenOutput: document.querySelector("#screenOutput"),
@@ -135,6 +151,15 @@ let remoteScrollInFlight = false;
 let screenRequestSerial = 0;
 let sessionRequestSerial = 0;
 let autoRefreshTick = 0;
+let sessionPointerStart = null;
+let suppressSessionClickUntil = 0;
+let clientDebugEnabled = false;
+let clientDebugTimer = null;
+let lastClientDebugAt = 0;
+let authToastTimer = null;
+let mobileAutoConnectTimer = null;
+let mobileAutoConnectSuppressed = false;
+let mobileAutoConnectInFlight = false;
 
 function getSelectedTarget() {
   return state.targets.find((target) => target.id === state.selectedTargetId) || null;
@@ -156,6 +181,224 @@ function invalidateSessionRequests() {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function getDebugParam() {
+  return new URLSearchParams(window.location.search).get("debug");
+}
+
+function describeElement(element) {
+  if (!element) {
+    return null;
+  }
+
+  return {
+    tag: element.tagName,
+    id: element.id || "",
+    className: typeof element.className === "string" ? element.className : "",
+    hidden: Boolean(element.hidden),
+    windowId: element.dataset?.windowId || "",
+    view: element.dataset?.view || ""
+  };
+}
+
+function describeBox(element) {
+  if (!element) {
+    return null;
+  }
+
+  const rect = element.getBoundingClientRect();
+  const style = window.getComputedStyle(element);
+  return {
+    element: describeElement(element),
+    rect: {
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      top: Math.round(rect.top),
+      bottom: Math.round(rect.bottom)
+    },
+    display: style.display,
+    visibility: style.visibility,
+    pointerEvents: style.pointerEvents,
+    position: style.position,
+    zIndex: style.zIndex,
+    overflow: style.overflow,
+    overflowY: style.overflowY,
+    touchAction: style.touchAction,
+    scrollTop: Math.round(element.scrollTop || 0),
+    scrollHeight: Math.round(element.scrollHeight || 0),
+    clientHeight: Math.round(element.clientHeight || 0)
+  };
+}
+
+function getEventPoint(event) {
+  const touch = event?.changedTouches?.[0] || event?.touches?.[0];
+  if (touch) {
+    return { x: touch.clientX, y: touch.clientY };
+  }
+
+  if (Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY)) {
+    return { x: event.clientX, y: event.clientY };
+  }
+
+  return null;
+}
+
+function createDebugSnapshot(eventName, event) {
+  const point = getEventPoint(event);
+  const center = {
+    x: Math.round(window.innerWidth / 2),
+    y: Math.round(window.innerHeight / 2)
+  };
+  const hitPoint = point || center;
+  const hitElement = document.elementFromPoint(hitPoint.x, hitPoint.y);
+
+  return {
+    source: "krd-client-debug",
+    build: CLIENT_BUILD,
+    event: eventName,
+    eventType: event?.type || "",
+    point: point ? { x: Math.round(point.x), y: Math.round(point.y) } : null,
+    href: window.location.href,
+    viewport: {
+      innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
+      outerWidth: window.outerWidth,
+      outerHeight: window.outerHeight,
+      devicePixelRatio: window.devicePixelRatio,
+      mobileQuery: isMobileViewport()
+    },
+    state: {
+      authenticated: state.authenticated,
+      mobileScreen: state.mobileScreen,
+      activeSidebarView: state.activeSidebarView,
+      sidebarVisible: state.sidebarVisible,
+      previewVisible: state.previewVisible,
+      previewPinned: state.previewPinned,
+      selectedTargetId: state.selectedTargetId,
+      selectedSocket: state.selectedSocket,
+      selectedWindowId: state.selectedWindowId,
+      flatWindowCount: state.flatWindows.length,
+      sessionTreeCount: state.sessionTree.length,
+      refreshing: state.refreshing,
+      screenExtent: state.screenExtent
+    },
+    classes: elements.appShell?.className || "",
+    activeElement: describeElement(document.activeElement),
+    hit: describeElement(hitElement),
+    hitPath: hitElement
+      ? Array.from(hitElement.closest?.("button, [data-window-id], section, aside, main, div") ? [hitElement.closest("button, [data-window-id], section, aside, main, div")] : [])
+          .map(describeElement)
+      : [],
+    boxes: {
+      html: describeBox(document.documentElement),
+      body: describeBox(document.body),
+      appShell: describeBox(elements.appShell),
+      authGate: describeBox(elements.authGate),
+      workbench: describeBox(document.querySelector(".workbench")),
+      primarySidebar: describeBox(elements.primarySidebar),
+      sshSidebarView: describeBox(elements.sshSidebarView),
+      sessionsSidebarView: describeBox(elements.sessionsSidebarView),
+      sessionTree: describeBox(elements.sessionTree),
+      editorRegion: describeBox(document.querySelector(".editor-region")),
+      previewDrawer: describeBox(elements.previewDrawer),
+      reopenPreviewBtn: describeBox(elements.reopenPreviewBtn)
+    }
+  };
+}
+
+function updateClientDebugOverlay(snapshot) {
+  let overlay = document.querySelector("#clientDebugOverlay");
+  if (!overlay) {
+    overlay = document.createElement("pre");
+    overlay.id = "clientDebugOverlay";
+    overlay.style.position = "fixed";
+    overlay.style.left = "8px";
+    overlay.style.right = "8px";
+    overlay.style.bottom = "8px";
+    overlay.style.zIndex = "10000";
+    overlay.style.maxHeight = "34dvh";
+    overlay.style.margin = "0";
+    overlay.style.padding = "8px";
+    overlay.style.overflow = "hidden";
+    overlay.style.border = "1px solid rgba(255,255,255,0.28)";
+    overlay.style.borderRadius = "6px";
+    overlay.style.background = "rgba(0,0,0,0.78)";
+    overlay.style.color = "#fff";
+    overlay.style.font = "11px ui-monospace, SFMono-Regular, Consolas, monospace";
+    overlay.style.pointerEvents = "none";
+    document.body.appendChild(overlay);
+  }
+
+  overlay.textContent = [
+    `KRD ${snapshot.build} ${snapshot.event}`,
+    `screen=${snapshot.state.mobileScreen} view=${snapshot.state.activeSidebarView} mobile=${snapshot.viewport.mobileQuery}`,
+    `hit=${snapshot.hit?.tag || "-"}#${snapshot.hit?.id || ""}.${snapshot.hit?.className || ""}`,
+    `sessions scroll=${snapshot.boxes.sessionsSidebarView?.scrollTop}/${snapshot.boxes.sessionsSidebarView?.scrollHeight}`,
+    `tree scroll=${snapshot.boxes.sessionTree?.scrollTop}/${snapshot.boxes.sessionTree?.scrollHeight}`
+  ].join("\n");
+}
+
+function sendClientDebug(eventName, event, options = {}) {
+  if (!clientDebugEnabled) {
+    return;
+  }
+
+  const now = Date.now();
+  if (!options.force && now - lastClientDebugAt < 500) {
+    return;
+  }
+  lastClientDebugAt = now;
+
+  const snapshot = createDebugSnapshot(eventName, event);
+  updateClientDebugOverlay(snapshot);
+
+  const payload = JSON.stringify(snapshot);
+  if (navigator.sendBeacon) {
+    navigator.sendBeacon("/api/client-log", new Blob([payload], { type: "application/json" }));
+    return;
+  }
+
+  fetch("/api/client-log", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: payload,
+    keepalive: true
+  }).catch(() => {});
+}
+
+function initializeClientDebug() {
+  const debugParam = getDebugParam();
+
+  try {
+    if (debugParam === "off") {
+      localStorage.removeItem(DEBUG_STORAGE_KEY);
+    } else if (debugParam) {
+      localStorage.setItem(DEBUG_STORAGE_KEY, "1");
+    }
+
+    clientDebugEnabled = localStorage.getItem(DEBUG_STORAGE_KEY) === "1";
+  } catch (error) {
+    clientDebugEnabled = Boolean(debugParam && debugParam !== "off");
+  }
+
+  if (!clientDebugEnabled) {
+    return;
+  }
+
+  ["touchstart", "touchmove", "touchend", "pointerdown", "pointerup", "click", "scroll"].forEach((eventName) => {
+    document.addEventListener(eventName, (event) => sendClientDebug(eventName, event), {
+      capture: true,
+      passive: true
+    });
+  });
+
+  clientDebugTimer = setInterval(() => {
+    sendClientDebug("heartbeat", null, { force: true });
+  }, 2000);
+  sendClientDebug("init", null, { force: true });
 }
 
 function getSidebarWidthBounds() {
@@ -235,6 +478,9 @@ function loadUiPreferences() {
     state.uiFontSizePx = normalizeFontSizePx(parsed.uiFontSizePx ?? parsed.uiFontSize);
     state.uiTheme = THEME_SET.has(parsed.uiTheme) ? parsed.uiTheme : "dark";
     state.screenExtent = TEXT_EXTENT_SET.has(parsed.screenExtent) ? parsed.screenExtent : "screen";
+    state.mobileTerminalWidth = MOBILE_TERMINAL_WIDTH_SET.has(parsed.mobileTerminalWidth)
+      ? parsed.mobileTerminalWidth
+      : "fit";
     state.resizeEnabled = Boolean(parsed.resizeEnabled);
     state.activeSidebarView = ["ssh", "sessions"].includes(parsed.activeSidebarView)
       ? parsed.activeSidebarView
@@ -269,6 +515,8 @@ function loadUiPreferences() {
     state.uiFontSizePx = FONT_SIZE_RANGE.default;
     state.uiTheme = "dark";
     state.screenExtent = "screen";
+    state.mobileTerminalWidth = "fit";
+    state.mobileScreen = "connect";
     state.resizeEnabled = false;
     state.activeSidebarView = "ssh";
     state.sidebarVisible = true;
@@ -290,6 +538,7 @@ function saveUiPreferences() {
       uiFontSizePx: state.uiFontSizePx,
       uiTheme: state.uiTheme,
       screenExtent: state.screenExtent,
+      mobileTerminalWidth: state.mobileTerminalWidth,
       previewVisible: state.previewVisible,
       previewPinned: state.previewPinned,
       previewUrl: state.previewUrl,
@@ -329,7 +578,149 @@ function renderBrowserHistoryOptions() {
   elements.browserHistorySelect.disabled = state.previewHistory.length === 0;
 }
 
+function isMobileViewport() {
+  return window.matchMedia("(max-width: 720px)").matches;
+}
+
+function getMobileHistoryScreen() {
+  const screen = history.state?.[MOBILE_HISTORY_KEY];
+  return MOBILE_SCREEN_SET.has(screen) ? screen : "";
+}
+
+function syncMobileHistory(screen, mode = "push") {
+  if (!isMobileViewport()) {
+    return;
+  }
+
+  const nextScreen = MOBILE_SCREEN_SET.has(screen) ? screen : "connect";
+  const currentScreen = getMobileHistoryScreen();
+  const nextState = {
+    ...(history.state || {}),
+    [MOBILE_HISTORY_KEY]: nextScreen
+  };
+
+  if (mode === "replace" || !currentScreen) {
+    history.replaceState(nextState, "", window.location.href);
+    return;
+  }
+
+  if (currentScreen !== nextScreen) {
+    history.pushState(nextState, "", window.location.href);
+  }
+}
+
+function setMobileScreen(screen, options = {}) {
+  const nextScreen = MOBILE_SCREEN_SET.has(screen) ? screen : "connect";
+  state.mobileScreen = nextScreen;
+
+  if (isMobileViewport() && nextScreen !== "chat") {
+    state.previewVisible = false;
+    state.previewPinned = false;
+  }
+
+  if (nextScreen === "connect") {
+    state.activeSidebarView = "ssh";
+    state.sidebarVisible = true;
+  } else if (nextScreen === "sessions") {
+    state.activeSidebarView = "sessions";
+    state.sidebarVisible = true;
+  } else {
+    state.sidebarVisible = false;
+  }
+
+  applyUiState();
+  if (options.history !== false) {
+    syncMobileHistory(nextScreen, options.history || "push");
+  }
+  sendClientDebug(`setMobileScreen:${nextScreen}`, null, { force: true });
+}
+
+function cancelMobileAutoConnect(options = {}) {
+  if (mobileAutoConnectTimer) {
+    clearTimeout(mobileAutoConnectTimer);
+    mobileAutoConnectTimer = null;
+  }
+
+  if (options.suppress) {
+    mobileAutoConnectSuppressed = true;
+  }
+}
+
+function scheduleMobileAutoConnect(options = {}) {
+  cancelMobileAutoConnect();
+
+  if (options.resetSuppression) {
+    mobileAutoConnectSuppressed = false;
+  }
+
+  if (
+    mobileAutoConnectSuppressed ||
+    !isMobileViewport() ||
+    !state.authenticated ||
+    !state.selectedTargetId
+  ) {
+    return;
+  }
+
+  mobileAutoConnectTimer = setTimeout(async () => {
+    mobileAutoConnectTimer = null;
+
+    if (
+      mobileAutoConnectSuppressed ||
+      mobileAutoConnectInFlight ||
+      !state.authenticated ||
+      !state.selectedTargetId ||
+      state.mobileScreen !== "connect"
+    ) {
+      return;
+    }
+
+    mobileAutoConnectInFlight = true;
+    setStatus("Auto Connect：正在连接上次目标…", "neutral");
+
+    try {
+      await connectSelectedTarget({ source: "auto" });
+    } catch (error) {
+      setTargetHealth("自动连接失败", "danger");
+      setStatus(`Auto Connect failed: ${error.message}`, "danger");
+    } finally {
+      mobileAutoConnectInFlight = false;
+    }
+  }, MOBILE_AUTO_CONNECT_DELAY_MS);
+}
+
+function handleMobileBack(targetScreen) {
+  if (targetScreen === "connect") {
+    cancelMobileAutoConnect({ suppress: true });
+  }
+  setMobileScreen(targetScreen, { history: "replace" });
+}
+
+function handleMobileHistoryChange(event) {
+  if (!isMobileViewport()) {
+    return;
+  }
+
+  const screen = event.state?.[MOBILE_HISTORY_KEY];
+  const nextScreen = MOBILE_SCREEN_SET.has(screen) ? screen : "connect";
+
+  if (nextScreen === "connect") {
+    cancelMobileAutoConnect({ suppress: true });
+  }
+
+  setMobileScreen(nextScreen, { history: false });
+}
+
 function applyUiState() {
+  if (isMobileViewport()) {
+    state.sidebarVisible = state.mobileScreen !== "chat";
+    if (state.mobileScreen === "connect") {
+      state.activeSidebarView = "ssh";
+    } else if (state.mobileScreen === "sessions") {
+      state.activeSidebarView = "sessions";
+    }
+  }
+
   const showingSsh = state.activeSidebarView === "ssh";
   const showingSessions = state.activeSidebarView === "sessions";
   elements.sshSidebarView.hidden = !showingSsh;
@@ -337,6 +728,10 @@ function applyUiState() {
   elements.appShell.classList.toggle("sidebar-hidden", !state.sidebarVisible);
   elements.appShell.classList.toggle("preview-open", state.previewVisible);
   elements.appShell.classList.toggle("browser-pinned", state.previewVisible && state.previewPinned);
+  elements.appShell.classList.toggle("mobile-screen-connect", state.mobileScreen === "connect");
+  elements.appShell.classList.toggle("mobile-screen-sessions", state.mobileScreen === "sessions");
+  elements.appShell.classList.toggle("mobile-screen-chat", state.mobileScreen === "chat");
+  elements.appShell.classList.toggle("mobile-terminal-wide", state.mobileTerminalWidth === "wide");
   elements.showSshViewBtn.classList.toggle("active", state.sidebarVisible && showingSsh);
   elements.showSessionsViewBtn.classList.toggle("active", state.sidebarVisible && showingSessions);
   elements.showSshViewBtn.setAttribute("aria-pressed", String(state.sidebarVisible && showingSsh));
@@ -364,6 +759,12 @@ function applyUiState() {
   elements.allTextModeBtn.setAttribute("aria-pressed", String(state.screenExtent === "all"));
   elements.refreshTextBtn.textContent = state.screenExtent === "all" ? "Refresh All" : "Refresh";
   elements.screenOutput.dataset.extent = state.screenExtent;
+  elements.mobileTerminalWidthBtn.classList.toggle("active", state.mobileTerminalWidth === "wide");
+  elements.mobileTerminalWidthBtn.setAttribute("aria-pressed", String(state.mobileTerminalWidth === "wide"));
+  elements.mobileTerminalWidthBtn.textContent = state.mobileTerminalWidth === "wide" ? "Wide" : "Fit";
+  elements.mobileTerminalWidthBtn.title = state.mobileTerminalWidth === "wide"
+    ? "保持终端原始宽度，可横向滚动"
+    : "适配手机宽度，自动换行";
   elements.resizeToggle.checked = state.resizeEnabled;
   document.documentElement.style.setProperty("--root-font-size", `${state.uiFontSizePx}px`);
   document.documentElement.dataset.theme = state.uiTheme;
@@ -500,17 +901,52 @@ function setAuthStatus(message, mode) {
   }
 }
 
+function getAuthDeviceText(device) {
+  if (!device) {
+    return "";
+  }
+
+  const label = device.label || "Unnamed device";
+  const preview = device.tokenPreview ? ` · ${device.tokenPreview}` : "";
+  return `${label}${preview}`;
+}
+
+function setAuthDeviceMeta(device, fallback = "请输入这台设备对应的 token。") {
+  elements.authDeviceMeta.textContent = device
+    ? `当前 key：${getAuthDeviceText(device)}`
+    : fallback;
+}
+
+function showAuthToast(message, mode = "success") {
+  if (authToastTimer) {
+    clearTimeout(authToastTimer);
+  }
+
+  elements.authToast.textContent = message;
+  elements.authToast.dataset.mode = mode;
+  elements.authToast.hidden = false;
+
+  authToastTimer = setTimeout(() => {
+    elements.authToast.hidden = true;
+  }, 3200);
+}
+
 function setAuthState(authenticated, device = null) {
   state.authenticated = Boolean(authenticated);
   state.authDevice = state.authenticated ? device : null;
   elements.authGate.hidden = state.authenticated;
   elements.authDeviceLabel.hidden = !state.authenticated;
   elements.logoutBtn.hidden = !state.authenticated;
-  elements.authDeviceLabel.textContent = state.authDevice ? `Device: ${state.authDevice.label}` : "";
+  elements.authDeviceLabel.textContent = state.authDevice ? `Key: ${getAuthDeviceText(state.authDevice)}` : "";
+  setAuthDeviceMeta(state.authDevice);
 
   if (!state.authenticated && pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
+  }
+
+  if (!state.authenticated) {
+    cancelMobileAutoConnect({ suppress: true });
   }
 }
 
@@ -601,8 +1037,19 @@ async function apiFetch(url, options = {}) {
 }
 
 async function checkAuthStatus() {
+  setAuthState(false);
+  setAuthStatus("正在检查已保存的登录状态…", "neutral");
+  setAuthDeviceMeta(null, "如果这台设备已经登录，会自动进入工作区。");
   const payload = await apiFetch("/api/auth/status");
   setAuthState(Boolean(payload.authenticated), payload.device || null);
+  if (state.authenticated) {
+    const deviceText = getAuthDeviceText(state.authDevice);
+    setAuthStatus(`认证成功：${deviceText}`, "success");
+    showAuthToast(`认证成功：${deviceText}`);
+  } else {
+    setAuthStatus("需要认证：请输入这台设备对应的 token。", "neutral");
+    setAuthDeviceMeta(null, "尚未认证。请输入管理员为这台设备创建的 token。");
+  }
   return state.authenticated;
 }
 
@@ -622,7 +1069,9 @@ async function loginWithDeviceToken() {
 
   elements.authTokenInput.value = "";
   setAuthState(true, payload.device);
-  setAuthStatus("登录成功。", "success");
+  const deviceText = getAuthDeviceText(payload.device);
+  setAuthStatus(`认证成功：${deviceText}`, "success");
+  showAuthToast(`认证成功：${deviceText}`);
   await bootAuthenticatedWorkspace();
 }
 
@@ -635,7 +1084,8 @@ async function logoutDevice() {
   clearSessionSelection();
   renderTargetSelect();
   renderSavedTargets();
-  setAuthStatus("已退出。", "neutral");
+  setAuthStatus("已退出。请输入 device token 重新认证。", "neutral");
+  setAuthDeviceMeta(null, "当前没有已认证 key。");
 }
 
 function normalizeTransport(value) {
@@ -788,6 +1238,62 @@ function getWindowProcessLabel(windowInfo) {
   return basename || "process";
 }
 
+async function selectWindow(windowId) {
+  state.selectedWindowId = Number(windowId);
+  if (isMobileViewport()) {
+    state.previewVisible = false;
+    state.previewPinned = false;
+    setMobileScreen("chat");
+  }
+  invalidateScreenRequests();
+  renderSessions();
+  renderMobilePaneSwitcher();
+  renderViewerMeta();
+  applyUiState();
+  await refreshScreen({
+    force: true,
+    scrollToBottom: state.screenExtent === "all" && state.allTextFollowTail,
+    scrollToTop: state.screenExtent === "screen"
+  });
+}
+
+function renderMobilePaneSwitcher() {
+  if (!state.flatWindows.length) {
+    elements.mobilePaneSwitcher.hidden = true;
+    elements.mobilePaneSwitcher.innerHTML = "";
+    return;
+  }
+
+  elements.mobilePaneSwitcher.hidden = false;
+  elements.mobilePaneSwitcher.innerHTML = state.flatWindows
+    .map((windowInfo) => {
+      const selected = Number(windowInfo.id) === Number(state.selectedWindowId) ? "selected" : "";
+      const title = [
+        windowInfo.title || `Pane ${windowInfo.id}`,
+        windowInfo.tabTitle ? `Tab: ${windowInfo.tabTitle}` : "",
+        windowInfo.cwd || ""
+      ].filter(Boolean).join(" · ");
+      return `
+        <button class="mobile-pane-tab ${selected}" type="button" data-mobile-window-id="${windowInfo.id}" title="${escapeAttribute(title)}">
+          ID ${escapeHtml(String(windowInfo.id))}
+        </button>
+      `;
+    })
+    .join("");
+
+  elements.mobilePaneSwitcher.querySelectorAll("[data-mobile-window-id]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await selectWindow(button.dataset.mobileWindowId);
+    });
+  });
+
+  const selectedButton = elements.mobilePaneSwitcher.querySelector(".mobile-pane-tab.selected");
+  if (selectedButton) {
+    const targetLeft = selectedButton.offsetLeft - (elements.mobilePaneSwitcher.clientWidth - selectedButton.clientWidth) / 2;
+    elements.mobilePaneSwitcher.scrollLeft = Math.max(0, targetLeft);
+  }
+}
+
 function renderSessions() {
   const totalWindows = state.flatWindows.length;
   const selectedTarget = getSelectedTarget();
@@ -798,6 +1304,7 @@ function renderSessions() {
 
   if (!state.sessionTree.length) {
     elements.sessionTree.innerHTML = `<div class="empty-note">还没有 kitty 会话数据。点击顶部的“连接”开始加载。</div>`;
+    renderMobilePaneSwitcher();
     return;
   }
 
@@ -863,17 +1370,54 @@ function renderSessions() {
 
   elements.sessionTree.querySelectorAll("[data-window-id]").forEach((button) => {
     button.addEventListener("click", async () => {
-      state.selectedWindowId = Number(button.dataset.windowId);
-      invalidateScreenRequests();
-      renderSessions();
-      renderViewerMeta();
-      await refreshScreen({
-        force: true,
-        scrollToBottom: state.screenExtent === "all" && state.allTextFollowTail,
-        scrollToTop: state.screenExtent === "screen"
-      });
+      if (Date.now() < suppressSessionClickUntil) {
+        return;
+      }
+      await selectWindow(button.dataset.windowId);
     });
   });
+
+  renderMobilePaneSwitcher();
+}
+
+function getSessionPaneFromEvent(event) {
+  return event.target.closest?.("[data-window-id]") || null;
+}
+
+function handleSessionPointerDown(event) {
+  const pane = getSessionPaneFromEvent(event);
+  if (!pane || !["touch", "pen"].includes(event.pointerType)) {
+    sessionPointerStart = null;
+    return;
+  }
+
+  sessionPointerStart = {
+    pointerId: event.pointerId,
+    windowId: pane.dataset.windowId,
+    x: event.clientX,
+    y: event.clientY,
+    time: Date.now()
+  };
+}
+
+async function handleSessionPointerUp(event) {
+  if (!sessionPointerStart || sessionPointerStart.pointerId !== event.pointerId) {
+    return;
+  }
+
+  const start = sessionPointerStart;
+  sessionPointerStart = null;
+  const pane = getSessionPaneFromEvent(event);
+  const moved = Math.hypot(event.clientX - start.x, event.clientY - start.y);
+  const elapsed = Date.now() - start.time;
+
+  if (!pane || pane.dataset.windowId !== start.windowId || moved > 14 || elapsed > 900) {
+    return;
+  }
+
+  suppressSessionClickUntil = Date.now() + 650;
+  event.preventDefault();
+  await selectWindow(start.windowId);
 }
 
 function renderSocketOptions(sockets, selectedSocket) {
@@ -1039,6 +1583,11 @@ function clearSessionSelection() {
   state.selectedWindowId = null;
   state.screenText = "";
   state.allTextFollowTail = true;
+  if (isMobileViewport()) {
+    state.mobileScreen = "connect";
+    state.activeSidebarView = "ssh";
+    state.sidebarVisible = true;
+  }
   renderSocketOptions([], "");
   renderSessions();
   renderViewerMeta();
@@ -1105,17 +1654,26 @@ async function testDraftTarget() {
   });
 }
 
-async function connectSelectedTarget() {
+async function connectSelectedTarget(options = {}) {
   if (!state.selectedTargetId) {
     setStatus("先保存一个连接目标。", "warning");
     return;
   }
 
+  if (options.source !== "auto") {
+    cancelMobileAutoConnect({ suppress: true });
+  }
+
+  sendClientDebug("connectSelectedTarget:start", null, { force: true });
   await testTargetRequest({
     targetId: state.selectedTargetId,
     socket: state.selectedSocket || ""
   });
   await loadSessions({ forceRefresh: true, scrollToBottom: state.screenExtent === "all" });
+  if (isMobileViewport()) {
+    setMobileScreen("sessions");
+  }
+  sendClientDebug("connectSelectedTarget:done", null, { force: true });
 }
 
 async function loadSessions(options = {}) {
@@ -1145,14 +1703,20 @@ async function loadSessions(options = {}) {
   }
 
   const previousWindowId = state.selectedWindowId;
+  const deferPaneRefresh = isMobileViewport() && state.mobileScreen !== "chat";
   state.sessionTree = data.tree || [];
   state.flatWindows = flattenWindows(state.sessionTree);
   state.selectedSocket = data.selectedSocket || "";
   renderSocketOptions(data.sockets || [], state.selectedSocket);
 
-  if (!state.selectedWindowId && state.flatWindows[0]) {
+  if (deferPaneRefresh && state.selectedWindowId) {
+    if (!state.flatWindows.some((window) => Number(window.id) === Number(state.selectedWindowId))) {
+      state.selectedWindowId = null;
+    }
+  } else if (!deferPaneRefresh && !state.selectedWindowId && state.flatWindows[0]) {
     state.selectedWindowId = Number(state.flatWindows[0].id);
   } else if (
+    !deferPaneRefresh &&
     state.selectedWindowId &&
     !state.flatWindows.some((window) => Number(window.id) === Number(state.selectedWindowId))
   ) {
@@ -1168,8 +1732,9 @@ async function loadSessions(options = {}) {
   renderViewerMeta();
   setTargetHealth("已连接", "success");
   updateStatusBar();
+  sendClientDebug("loadSessions:rendered", null, { force: true });
 
-  if (state.selectedWindowId) {
+  if (state.selectedWindowId && !deferPaneRefresh) {
     if (options.refreshPane !== false) {
       await refreshScreen({
         force: Boolean(options.forceRefresh),
@@ -1180,7 +1745,9 @@ async function loadSessions(options = {}) {
       elements.screenOutput.textContent = "当前 pane 已变化，点击 Refresh 更新内容。";
     }
   } else {
-    elements.screenOutput.textContent = "当前没有可显示的 pane。";
+    elements.screenOutput.textContent = deferPaneRefresh
+      ? "选择一个 Session 后再加载 pane 内容。"
+      : "当前没有可显示的 pane。";
   }
 }
 
@@ -1330,14 +1897,14 @@ async function scrollRemoteWindow(lines) {
   }
 }
 
-async function sendText() {
+async function sendText(options = {}) {
   if (!state.selectedTargetId || !state.selectedWindowId) {
     setStatus("先选中一个 pane。", "warning");
     return false;
   }
 
   const text = elements.sendTextInput.value;
-  if (!text.trim()) {
+  if (text.length === 0) {
     setStatus("输入点内容再发。", "warning");
     return false;
   }
@@ -1349,11 +1916,17 @@ async function sendText() {
       targetId: state.selectedTargetId,
       socket: state.selectedSocket,
       windowId: state.selectedWindowId,
-      text
+      text,
+      appendNewline: Boolean(options.appendNewline)
     })
   });
 
-  setStatus(`已向 pane #${state.selectedWindowId} 发送文本。`, "success");
+  setStatus(
+    options.appendNewline
+      ? `已向 pane #${state.selectedWindowId} 发送文本并提交。`
+      : `已向 pane #${state.selectedWindowId} 发送文本。`,
+    "success"
+  );
   elements.sendTextInput.value = "";
   await refreshScreen({ scrollToBottom: true });
   return true;
@@ -1402,8 +1975,8 @@ async function focusWindow() {
 async function sendComposerShortcut() {
   const text = elements.sendTextInput.value;
 
-  if (text.trim()) {
-    await sendText();
+  if (text.length > 0) {
+    await sendText({ appendNewline: true });
     return;
   }
 
@@ -1436,6 +2009,7 @@ async function setScreenExtent(extent) {
 }
 
 function resetTargetDraft() {
+  cancelMobileAutoConnect({ suppress: true });
   state.editingTargetId = "";
   writeTargetForm(DEFAULT_TARGET_FORM);
   setTargetHealth("待连接", "neutral");
@@ -1647,7 +2221,14 @@ function attachEvents() {
       setAuthStatus("正在登录…", "neutral");
       await loginWithDeviceToken();
     } catch (error) {
-      setAuthStatus(error.message, "danger");
+      if (!state.authenticated) {
+        setAuthState(false);
+        setAuthStatus(`认证失败：${error.message}`, "danger");
+        setAuthDeviceMeta(null, "请确认 token 是否属于这台设备，或让管理员重新创建/轮换 token。");
+      } else {
+        setAuthStatus(`认证成功，但工作区加载失败：${error.message}`, "danger");
+        showAuthToast(`工作区加载失败：${error.message}`, "danger");
+      }
     }
   });
 
@@ -1689,6 +2270,28 @@ function attachEvents() {
 
   elements.showSessionsViewBtn.addEventListener("click", () => {
     setSidebarView("sessions");
+  });
+
+  elements.mobileBackToConnectBtn.addEventListener("click", () => {
+    handleMobileBack("connect");
+  });
+
+  elements.mobileBackToSessionsBtn.addEventListener("click", () => {
+    handleMobileBack("sessions");
+  });
+
+  elements.mobileConnectTargetBtn.addEventListener("click", async () => {
+    try {
+      await connectSelectedTarget();
+    } catch (error) {
+      setTargetHealth("连接失败", "danger");
+      setStatus(error.message, "danger");
+    }
+  });
+
+  elements.mobileTerminalWidthBtn.addEventListener("click", () => {
+    state.mobileTerminalWidth = state.mobileTerminalWidth === "wide" ? "fit" : "wide";
+    applyUiState();
   });
 
   elements.decreaseFontBtn.addEventListener("click", () => {
@@ -1738,6 +2341,7 @@ function attachEvents() {
   });
 
   elements.testTargetBtn.addEventListener("click", async () => {
+    cancelMobileAutoConnect({ suppress: true });
     try {
       await testDraftTarget();
     } catch (error) {
@@ -1791,6 +2395,9 @@ function attachEvents() {
       });
       setStatus(`已切换到 ${target.name}。`, "neutral");
       await loadSessions({ forceRefresh: true, scrollToBottom: state.screenExtent === "all" });
+      if (isMobileViewport()) {
+        setMobileScreen("sessions");
+      }
     } catch (error) {
       setTargetHealth("切换失败", "danger");
       setStatus(error.message, "danger");
@@ -1811,6 +2418,13 @@ function attachEvents() {
   elements.sidebarResizeHandle.addEventListener("pointerdown", (event) => startResize("sidebar", event));
   elements.panelResizeHandle.addEventListener("pointerdown", (event) => startResize("panel", event));
   elements.browserResizeHandle.addEventListener("pointerdown", (event) => startResize("browser", event));
+  elements.sessionTree.addEventListener("pointerdown", handleSessionPointerDown);
+  elements.sessionTree.addEventListener("pointerup", (event) => {
+    handleSessionPointerUp(event).catch((error) => setStatus(error.message, "danger"));
+  });
+  elements.sessionTree.addEventListener("pointercancel", () => {
+    sessionPointerStart = null;
+  });
 
   elements.screenOutput.addEventListener("wheel", queueRemoteScrollFromWheel, { passive: false });
   elements.screenOutput.addEventListener("scroll", handleScreenOutputScroll, { passive: true });
@@ -1922,10 +2536,16 @@ function attachEvents() {
     document.documentElement.style.setProperty("--sidebar-width", `${getEffectiveSidebarWidth()}px`);
     document.documentElement.style.setProperty("--browser-width", `${getEffectiveBrowserWidth()}px`);
   });
+  window.addEventListener("popstate", handleMobileHistoryChange);
 }
 
 async function bootAuthenticatedWorkspace() {
   await loadTargets();
+  state.mobileScreen = "connect";
+  if (isMobileViewport()) {
+    state.activeSidebarView = "ssh";
+    state.sidebarVisible = true;
+  }
   if (state.previewVisible && state.previewUrl) {
     syncPreviewFrame();
   }
@@ -1934,11 +2554,15 @@ async function bootAuthenticatedWorkspace() {
   renderViewerMeta();
   setTargetHealth("待连接", "neutral");
   restartPolling();
+  scheduleMobileAutoConnect({ resetSuppression: true });
 }
 
 async function init() {
+  window.__KRD_BUILD = CLIENT_BUILD;
+  initializeClientDebug();
   loadUiPreferences();
   applyUiState();
+  syncMobileHistory(state.mobileScreen, "replace");
   attachEvents();
   attachWheelContainment();
 
@@ -1955,4 +2579,5 @@ init().catch((error) => {
   setAuthState(false);
   setStatus(error.message, "danger");
   setAuthStatus(error.message, "danger");
+  setAuthDeviceMeta(null, "认证状态检查失败，请稍后重试或重新输入 token。");
 });

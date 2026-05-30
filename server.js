@@ -24,8 +24,10 @@ const PORT = Number(process.env.PORT || 3040);
 const HOST = process.env.HOST || process.env.BIND_HOST || "127.0.0.1";
 const ROOT_DIR = __dirname;
 const DATA_DIR = path.join(ROOT_DIR, "data");
+const TMP_DIR = path.join(ROOT_DIR, "tmp");
 const TARGETS_FILE = path.join(DATA_DIR, "targets.json");
 const AUTH_FILE = process.env.KRD_AUTH_FILE || path.join(DATA_DIR, "auth.json");
+const CLIENT_DEBUG_LOG_FILE = path.join(TMP_DIR, "client-debug.log");
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
 const REMOTE_HELPER_PATH = path.join(ROOT_DIR, "server", "remote_helper.py");
 const authManager = createAuthManager(AUTH_FILE);
@@ -171,6 +173,21 @@ function sendBuffer(response, statusCode, buffer, contentType, headers = {}) {
     ...headers
   });
   response.end(buffer);
+}
+
+async function appendClientDebugLog(payload, request) {
+  const payloadText = JSON.stringify(payload || {});
+  const entry = {
+    at: nowIso(),
+    ip: request.headers["cf-connecting-ip"] || request.socket.remoteAddress || "",
+    userAgent: request.headers["user-agent"] || "",
+    payload: payloadText.length > 18000
+      ? { truncated: true, text: payloadText.slice(0, 18000) }
+      : payload
+  };
+
+  await fsp.mkdir(TMP_DIR, { recursive: true });
+  await fsp.appendFile(CLIENT_DEBUG_LOG_FILE, `${JSON.stringify(entry)}\n`);
 }
 
 async function parseRequestBody(request) {
@@ -387,6 +404,13 @@ async function handleApi(request, response, requestUrl) {
 
     if (!auth) {
       sendUnauthorized(response);
+      return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/api/client-log") {
+      const body = await parseRequestBody(request);
+      await appendClientDebugLog(body, request);
+      sendJson(response, 200, { ok: true });
       return;
     }
 

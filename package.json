@@ -5,6 +5,7 @@
   "description": "A local web front-end for browsing and controlling local or SSH kitty GUI sessions.",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "smoke:chrome": "node scripts/chrome-smoke.mjs"
   }
 }
