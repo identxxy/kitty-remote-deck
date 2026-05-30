@@ -1,5 +1,9 @@
 (function attachComposerUtils(global) {
-  function getEnterAction(text) {
+  function getEnterAction(text, options = {}) {
+    if (options.hasImage) {
+      return { type: "send-composer", appendNewline: true };
+    }
+
     return String(text || "").length > 0
       ? { type: "send-text", appendNewline: true }
       : { type: "send-key", key: "enter" };

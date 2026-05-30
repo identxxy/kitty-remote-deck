@@ -88,6 +88,9 @@ Edit the target in the Connect sidebar if your kitty binary or socket pattern di
 - `Enter` in the composer sends text and a final terminal `Enter` when the textbox has content, including whitespace or newline-only content.
 - `Enter` in an empty composer sends `Enter` to the selected pane.
 - `Shift+Enter`, or a mobile keyboard action that inserts a newline, keeps that newline in the composer.
+- The Image button, paste, or drag/drop can attach one image to the composer. Sending saves it on the active target and sends a Markdown image reference such as `![name](file:///target/path)` to the selected pane.
+- Images are stored on the active target host, not in the browser. The default path is `~/Pictures/voxpress/YYYYMMDD/YYYYMMDDHHMMSS-random-name.ext`; Local targets use the server machine, and SSH targets use the remote SSH user's home directory. Set `KRD_IMAGE_UPLOAD_DIR=/path/to/dir` before starting the server to override the root directory for target-side uploads.
+- Image uploads are not cleaned automatically. Treat `~/Pictures/voxpress/` as a user-visible inbox for files sent into KT sessions.
 - `Screen` mode shows the current kitty viewport; mouse wheel sends `kitty @ scroll-window` to the selected pane and then refreshes the screen text.
 - `All` mode fetches `get-text --extent all`; mouse wheel scrolls the browser's local scrollback view.
 - When `All` mode is scrolled away from the bottom, automatic full-text refresh pauses to avoid jumping and repeated scrollback transfers. Use `Refresh All` to return to the live tail.
@@ -97,8 +100,8 @@ Edit the target in the Connect sidebar if your kitty binary or socket pattern di
 - On mobile-width screens, the UI becomes a chat-style flow: Connect screen, full-screen Session list, then a full-screen pane conversation with a back button.
 - Mobile pane conversations keep the input composer visible at the bottom. Fit mode wraps terminal text to the phone width; Wide mode preserves terminal columns and allows horizontal scrolling.
 - On mobile, terminal URL clicks open the Browser as a full-screen overlay. Use `‹ KT Panel` or the system Back action to return to the pane, or the floating Browser tab to reopen the last preview.
-- `发送 Esc` sends `escape` to the selected pane, useful for interrupting full-screen or agent UIs.
-- `发送 Ctrl+C` sends `ctrl+c` to the selected pane.
+- `Esc` sends `escape` to the selected pane, useful for interrupting full-screen or agent UIs.
+- `Ctrl+C` sends `ctrl+c` to the selected pane.
 - `Ctrl+D` sends `ctrl+d` to the selected pane.
 
 ## Workbench Layout
@@ -118,6 +121,7 @@ Edit the target in the Connect sidebar if your kitty binary or socket pattern di
 - `public/modules/mobile-utils.js`: mobile viewport and browser-history helpers.
 - `public/modules/preview-history.js`: pure Browser URL stack operations for root, back, forward, and jump behavior.
 - `public/modules/composer-utils.js`: pure Input Console Enter-key submit decisions.
+- `server/image_upload.js`: target-side image upload helpers and Markdown image-reference formatting.
 
 ## Embedded Browser Proxy
 

@@ -452,12 +452,18 @@ async function runMobileChatViewport(client, width, height, label) {
       const originalApiFetch = apiFetch;
       const originalRefreshScreen = refreshScreen;
       const composerCalls = [];
+      let imageSendRelease = null;
       apiFetch = async (url, options = {}) => {
-        if (url === '/api/send-text' || url === '/api/send-key') {
+        if (url === '/api/send-text' || url === '/api/send-key' || url === '/api/send-image') {
           composerCalls.push({
             url,
             body: options.body ? JSON.parse(options.body) : {}
           });
+          if (url === '/api/send-image') {
+            return new Promise((resolve) => {
+              imageSendRelease = () => resolve({ ok: true, image: { fileUrl: 'file:///tmp/smoke.png' } });
+            });
+          }
           return { ok: true, data: {} };
         }
         return originalApiFetch(url, options);
@@ -467,6 +473,7 @@ async function runMobileChatViewport(client, width, height, label) {
       state.selectedTargetId = 'local';
       state.selectedWindowId = 2345;
       state.selectedSocket = '/tmp/kitty-smoke.sock';
+      setMobileScreen('chat', { history: 'replace' });
       const composer = document.querySelector('#sendTextInput');
 
       composer.value = 'line 1\\nline 2';
@@ -490,11 +497,55 @@ async function runMobileChatViewport(client, width, height, label) {
         valueAfter: composer.value
       };
 
+      state.imageAttachment = {
+        name: 'smoke.png',
+        type: 'image/png',
+        size: 8,
+        dataUrl: 'data:image/png;base64,c21va2U=',
+        base64: 'c21va2U='
+      };
+      renderImageAttachment();
+      composer.value = 'look at this';
+      const imageBeforeSend = {
+        attachment: rect('#imageAttachment'),
+        input: rect('#sendTextInput'),
+        panel: rect('#bottomPanel'),
+        actions: rect('.console-actions'),
+        actionOrder: Array.from(document.querySelectorAll('.console-actions button'))
+          .map((button) => ({
+            id: button.id,
+            left: button.getBoundingClientRect().left
+          }))
+          .sort((a, b) => a.left - b.left)
+          .map((item) => item.id),
+        panelHasImage: document.querySelector('#bottomPanel').classList.contains('has-image-attachment')
+      };
+      const imageSendPromise = sendComposerShortcut();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const imageDuringSend = {
+        sendDisabled: document.querySelector('#sendTextBtn').disabled,
+        imageDisabled: document.querySelector('#attachImageBtn').disabled,
+        sendText: document.querySelector('#sendTextBtn').textContent.trim()
+      };
+      await sendComposerShortcut();
+      imageSendRelease?.();
+      await imageSendPromise;
+      const imageComposer = {
+        calls: composerCalls.slice(multilineComposer.calls.length + newlineOnlyComposer.calls.length + emptyComposer.calls.length),
+        beforeSend: imageBeforeSend,
+        duringSend: imageDuringSend,
+        valueAfter: composer.value,
+        attachmentHidden: document.querySelector('#imageAttachment').hidden,
+        panelHasImage: document.querySelector('#bottomPanel').classList.contains('has-image-attachment')
+      };
+
       apiFetch = originalApiFetch;
       refreshScreen = originalRefreshScreen;
+      clearImageAttachment();
       state.selectedTargetId = '';
       state.selectedWindowId = null;
       state.selectedSocket = '';
+      setMobileScreen('connect', { history: 'replace' });
 
       return {
         label: ${JSON.stringify(label)},
@@ -521,7 +572,8 @@ async function runMobileChatViewport(client, width, height, label) {
         composerEnter: {
           multiline: multilineComposer,
           newlineOnly: newlineOnlyComposer,
-          empty: emptyComposer
+          empty: emptyComposer,
+          image: imageComposer
         }
       };
     })()`
@@ -684,7 +736,7 @@ async function runMobileChatViewport(client, width, height, label) {
     mobileFlow.mobileBrowserPreview.previewHistory.length !== 1 ||
     mobileFlow.mobileBrowserPreview.previewHistory[0] !== "https://example.com/mobile.html" ||
     !mobileFlow.mobileBrowserAfterDeferredSessionRefresh.screenText.includes("line 2") ||
-    mobileFlow.mobileBrowserAfterDeferredSessionRefresh.screenText.includes("选择一个 Session") ||
+    mobileFlow.mobileBrowserAfterDeferredSessionRefresh.screenText.includes("Select a session") ||
     mobileFlow.mobileBrowserAfterDeferredSessionRefresh.selectedPane !== 2345 ||
     mobileFlow.mobileBrowserAfterSystemBack.mobileScreen !== "chat" ||
     mobileFlow.mobileBrowserAfterSystemBack.historyScreen !== "chat" ||
@@ -748,8 +800,29 @@ async function runMobileChatViewport(client, width, height, label) {
     mobileFlow.composerEnter.empty.calls.length !== 1 ||
     mobileFlow.composerEnter.empty.calls[0].url !== "/api/send-key" ||
     mobileFlow.composerEnter.empty.calls[0].body.key !== "enter" ||
+    mobileFlow.composerEnter.image.calls.length !== 1 ||
+    mobileFlow.composerEnter.image.calls[0].url !== "/api/send-image" ||
+    mobileFlow.composerEnter.image.calls[0].body.text !== "look at this" ||
+    mobileFlow.composerEnter.image.calls[0].body.fileName !== "smoke.png" ||
+    mobileFlow.composerEnter.image.calls[0].body.mimeType !== "image/png" ||
+    mobileFlow.composerEnter.image.calls[0].body.appendNewline !== true ||
+    mobileFlow.composerEnter.image.beforeSend.panelHasImage !== true ||
+    mobileFlow.composerEnter.image.beforeSend.attachment.height <= 0 ||
+    mobileFlow.composerEnter.image.beforeSend.input.height <= 0 ||
+    mobileFlow.composerEnter.image.beforeSend.panel.height <= 0 ||
+    mobileFlow.composerEnter.image.beforeSend.actions.height <= 0 ||
+    mobileFlow.composerEnter.image.beforeSend.actionOrder.join(",") !== "attachImageBtn,sendEscBtn,sendCtrlCBtn,sendCtrlDBtn,sendEnterBtn,sendTextBtn" ||
+    mobileFlow.composerEnter.image.beforeSend.attachment.bottom > mobileFlow.composerEnter.image.beforeSend.input.top ||
+    mobileFlow.composerEnter.image.beforeSend.input.bottom > mobileFlow.composerEnter.image.beforeSend.actions.top ||
+    mobileFlow.composerEnter.image.beforeSend.actions.bottom > mobileFlow.composerEnter.image.beforeSend.panel.bottom + 1 ||
+    mobileFlow.composerEnter.image.duringSend.sendDisabled !== true ||
+    mobileFlow.composerEnter.image.duringSend.imageDisabled !== true ||
+    mobileFlow.composerEnter.image.duringSend.sendText !== "Sending" ||
+    mobileFlow.composerEnter.image.valueAfter !== "" ||
+    mobileFlow.composerEnter.image.attachmentHidden !== true ||
+    mobileFlow.composerEnter.image.panelHasImage !== false ||
     !mobileFlow.touchTap.clicks.some((item) => item.id === "mobileConnectTargetBtn") ||
-    !mobileFlow.touchTap.status.includes("先保存一个连接目标") ||
+    !mobileFlow.touchTap.status.includes("Save a connection target first") ||
     mobileFlow.sessionTouchSetup.scrollHeight <= mobileFlow.sessionTouchSetup.clientHeight ||
     mobileFlow.sessionTouchScroll.scrollTop <= mobileFlow.sessionTouchSetup.initialScrollTop ||
     !mobileFlow.sessionTouchScroll.tapTarget ||
@@ -1010,9 +1083,9 @@ async function runViewport(client, width, height, label) {
       return !document.querySelector('#screenOutput').dispatchEvent(event);
     })()`
   );
-  await waitForExpression(client, "document.querySelector('#statusMessage')?.textContent.includes('先选中一个 pane')");
+  await waitForExpression(client, "document.querySelector('#statusMessage')?.textContent.includes('Select a pane first')");
   await evaluate(client, "document.querySelector('#sendEscBtn').click(); true");
-  await waitForExpression(client, "document.querySelector('#statusMessage')?.textContent.includes('先选中一个 pane')");
+  await waitForExpression(client, "document.querySelector('#statusMessage')?.textContent.includes('Select a pane first')");
   await evaluate(client, "document.querySelector('#resizeToggle').click(); true");
   await waitForExpression(client, "document.querySelector('#appShell').classList.contains('resize-enabled')");
   await evaluate(
@@ -1068,6 +1141,14 @@ async function runViewport(client, width, height, label) {
         wheelCanceled: ${JSON.stringify(wheelCanceled)},
         escClickStatus: document.querySelector('#statusMessage').textContent,
         ctrlDText: document.querySelector('#sendCtrlDBtn').textContent,
+        panelImageButton: {
+          headerDisplay: getComputedStyle(document.querySelector('#attachImageHeadBtn')).display,
+          headerLabel: document.querySelector('#attachImageHeadBtn').getAttribute('aria-label'),
+          headerIcon: Boolean(document.querySelector('#attachImageHeadBtn .image-action-icon')),
+          actionLabel: document.querySelector('#attachImageBtn').getAttribute('aria-label'),
+          actionIcon: Boolean(document.querySelector('#attachImageBtn .image-action-icon')),
+          actionDisplay: getComputedStyle(document.querySelector('#attachImageBtn')).display
+        },
         fontSizeText: document.querySelector('#fontSizeValue').textContent,
         pageWidth: document.documentElement.scrollWidth,
         viewportWidth: window.innerWidth,
@@ -1083,7 +1164,7 @@ async function runViewport(client, width, height, label) {
   if (
     metrics.title !== "Kitty Remote Deck" ||
     metrics.authInitial.gateHidden !== false ||
-    !/认证|登录|token/.test(metrics.authInitial.status) ||
+    !/auth|sign|token/i.test(metrics.authInitial.status) ||
     Math.abs(metrics.shell.height - height) > 3 ||
     metrics.editor.height <= metrics.panel.height ||
     metrics.screen.top < metrics.workbench.top - 2 ||
@@ -1148,8 +1229,16 @@ async function runViewport(client, width, height, label) {
     metrics.previewDrawerWorked.reopened !== true ||
     metrics.previewDrawerWorked.reopenedFrameSrc !== metrics.previewDrawerWorked.frameNavigateSrc ||
     metrics.wheelCanceled !== true ||
-    !metrics.escClickStatus.includes("先选中一个 pane") ||
+    !metrics.escClickStatus.includes("Select a pane first") ||
     !metrics.ctrlDText.includes("Ctrl+D") ||
+    metrics.panelImageButton.headerLabel !== "Attach image" ||
+    metrics.panelImageButton.actionLabel !== "Attach image" ||
+    metrics.panelImageButton.headerIcon !== true ||
+    metrics.panelImageButton.actionIcon !== true ||
+    (metrics.label === "desktop" && metrics.panelImageButton.headerDisplay === "none") ||
+    (metrics.label === "desktop" && metrics.panelImageButton.actionDisplay !== "none") ||
+    (metrics.label === "portrait" && metrics.panelImageButton.headerDisplay === "none") ||
+    (metrics.label === "portrait" && metrics.panelImageButton.actionDisplay !== "none") ||
     metrics.fontSizeText !== "13px"
   ) {
     throw new Error(`Workbench metrics failed for ${label}: ${JSON.stringify(metrics, null, 2)}`);

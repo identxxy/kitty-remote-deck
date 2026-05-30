@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Kitty Remote Deck</title>
-    <link rel="stylesheet" href="/styles.css?v=0.1.0-browser-composer-refactor-1" />
+    <link rel="stylesheet" href="/styles.css?v=0.1.0-image-composer-11" />
   </head>
   <body>
     <div class="app-shell" id="appShell">
@@ -19,22 +19,22 @@
 
         <div class="topbar-controls">
           <div class="view-controls" aria-label="View controls">
-            <div class="segmented-control font-control" aria-label="字号">
-              <button class="toolbar-button" id="decreaseFontBtn" type="button" title="减小字号">A-</button>
-              <span class="font-size-value" id="fontSizeValue" title="字号">13px</span>
-              <button class="toolbar-button" id="increaseFontBtn" type="button" title="增大字号">A+</button>
+            <div class="segmented-control font-control" aria-label="Font size">
+              <button class="toolbar-button" id="decreaseFontBtn" type="button" title="Decrease font size">A-</button>
+              <span class="font-size-value" id="fontSizeValue" title="Font size">13px</span>
+              <button class="toolbar-button" id="increaseFontBtn" type="button" title="Increase font size">A+</button>
             </div>
 
-            <label class="theme-control" title="主题">
+            <label class="theme-control" title="Theme">
               <span class="theme-dot" aria-hidden="true"></span>
-              <select id="themeSelect" aria-label="主题">
+              <select id="themeSelect" aria-label="Theme">
                 <option value="dark">Dark</option>
                 <option value="graphite">Graphite</option>
                 <option value="light">Light</option>
               </select>
             </label>
 
-            <label class="resize-lock" title="允许拖拽调整布局">
+            <label class="resize-lock" title="Allow layout resizing">
               <input id="resizeToggle" type="checkbox" />
               <span id="resizeLabel">Layout Locked</span>
             </label>
@@ -44,9 +44,9 @@
 
         <div class="topbar-actions">
           <span class="auth-device-label" id="authDeviceLabel" hidden></span>
-          <button class="ghost-button" id="logoutBtn" type="button" hidden>退出</button>
-          <button class="ghost-button" id="reloadSessionsBtn" type="button">刷新</button>
-          <button class="secondary-button" id="connectTargetBtn" type="button">连接</button>
+          <button class="ghost-button" id="logoutBtn" type="button" hidden>Sign Out</button>
+          <button class="ghost-button" id="reloadSessionsBtn" type="button">Refresh</button>
+          <button class="secondary-button" id="connectTargetBtn" type="button">Connect</button>
         </div>
       </header>
 
@@ -70,7 +70,7 @@
                 <p class="section-kicker">KT Sessions</p>
                 <h2>Session Explorer</h2>
               </div>
-              <button class="icon-button" id="reloadSessionTreeBtn" type="button" aria-label="刷新会话">↻</button>
+              <button class="icon-button" id="reloadSessionTreeBtn" type="button" aria-label="Refresh sessions">↻</button>
             </div>
 
             <label class="compact-select socket-field">
@@ -79,7 +79,7 @@
             </label>
 
             <div class="status-panel subtle" id="sessionSummary">
-              连接成功后，这里会列出 kitty 的 OS 窗口、tabs 和 panes。
+              Connected kitty OS windows, tabs, and panes appear here.
             </div>
 
             <div class="session-tree scroll-panel" id="sessionTree"></div>
@@ -91,7 +91,7 @@
                 <p class="section-kicker">Connection Targets</p>
                 <h2>Connect</h2>
               </div>
-              <button class="icon-button" id="reloadTargetsBtn" type="button" aria-label="重新载入目标">↻</button>
+              <button class="icon-button" id="reloadTargetsBtn" type="button" aria-label="Reload targets">↻</button>
             </div>
 
             <section class="ssh-target-summary">
@@ -121,18 +121,18 @@
                   <small>local / ssh</small>
                 </div>
                 <label>
-                  <span>名称</span>
+                  <span>Name</span>
                   <input id="targetName" name="name" placeholder="Local Kitty" required />
                 </label>
                 <label>
-                  <span>连接类型</span>
+                  <span>Transport</span>
                   <select id="targetTransport" name="transport" required>
                     <option value="local">Local</option>
                     <option value="ssh">SSH</option>
                   </select>
                 </label>
                 <label>
-                  <span>SSH 目标</span>
+                  <span>SSH Target</span>
                   <input id="targetSsh" name="sshTarget" placeholder="ssh-host" />
                 </label>
               </section>
@@ -143,15 +143,15 @@
                   <small>kitty @</small>
                 </div>
                 <label>
-                  <span>Kitty 二进制</span>
+                  <span>Kitty Binary</span>
                   <input id="targetKittyBinary" name="kittyBinary" placeholder="kitty" />
                 </label>
                 <label>
-                  <span>Socket 匹配</span>
+                  <span>Socket Pattern</span>
                   <input id="targetSocketPattern" name="socketPattern" placeholder="/tmp/kitty.sock-*" />
                 </label>
                 <label>
-                  <span>默认 Socket（可选）</span>
+                  <span>Default Socket (optional)</span>
                   <input id="targetDefaultSocket" name="defaultSocket" placeholder="/tmp/kitty.sock-11305" />
                 </label>
               </section>
@@ -162,8 +162,8 @@
                   <small>optional</small>
                 </div>
                 <label>
-                  <span>备注</span>
-                  <textarea id="targetNotes" name="notes" rows="3" placeholder="记录这台机器的用途、布局或约定。"></textarea>
+                  <span>Notes</span>
+                  <textarea id="targetNotes" name="notes" rows="3" placeholder="Record this machine's purpose, layout, or conventions."></textarea>
                 </label>
               </section>
 
@@ -173,7 +173,7 @@
             </form>
 
             <div class="status-panel" id="targetStatus">
-              目标设置会保存在本地。Local 会直接控制本机 kitty；SSH 会通过远端 helper 控制目标主机。
+              Target settings are saved locally. Local controls kitty on this machine; SSH controls the target host through the remote helper.
             </div>
           </section>
         </aside>
@@ -187,7 +187,7 @@
             <div class="editor-toolbar">
               <button class="mobile-back-button" id="mobileBackToSessionsBtn" type="button">‹ Sessions</button>
               <div class="editor-tab" id="viewerMeta">
-                选中一个 pane 后，这里会显示它的标题、目录和当前前台进程。
+                Select a pane to show its title, directory, and foreground process.
               </div>
               <div class="editor-tools">
                 <div class="segmented-control editor-mode-control" aria-label="Editor text extent">
@@ -198,12 +198,12 @@
                 <button class="ghost-button compact-editor-button" id="refreshTextBtn" type="button">Refresh</button>
                 <label class="toggle">
                   <input id="autoRefreshToggle" type="checkbox" checked />
-                  <span>自动刷新</span>
+                  <span>Auto-refresh</span>
                 </label>
               </div>
             </div>
 
-            <pre class="screen-output scroll-panel" id="screenOutput">等待选择一个 kitty pane…</pre>
+            <pre class="screen-output scroll-panel" id="screenOutput">Waiting for a kitty pane...</pre>
           </section>
 
           <div class="resize-handle panel-resize-handle" id="panelResizeHandle" role="separator" aria-orientation="horizontal"></div>
@@ -212,22 +212,45 @@
             <div class="panel-head compact-panel-head">
               <p class="section-kicker">Input Console</p>
               <div class="panel-mini-actions">
-                <span>Enter 发送</span>
-                <span>Shift+Enter 换行</span>
+                <button class="ghost-button image-action-button panel-image-button" id="attachImageHeadBtn" type="button" aria-label="Attach image" title="Attach image">
+                  <svg class="image-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <rect x="3" y="5" width="18" height="14" rx="2"></rect>
+                    <circle cx="8.5" cy="10" r="1.5"></circle>
+                    <path d="m6 17 4.5-4.5 3.5 3.5 2-2 2.5 3"></path>
+                  </svg>
+                </button>
               </div>
             </div>
 
             <form id="sendForm" class="send-form">
-              <label class="composer-field">
-                <span class="sr-only">发送文本</span>
-                <textarea id="sendTextInput" rows="4" placeholder="Enter 发送文本&#10;Shift+Enter 换行&#10;空输入按 Enter 发送 Enter"></textarea>
-              </label>
+              <div class="composer-stack" id="composerStack">
+                <div class="image-attachment" id="imageAttachment" hidden>
+                  <img id="imageAttachmentThumb" alt="" />
+                  <div class="image-attachment-meta">
+                    <strong id="imageAttachmentName">image</strong>
+                    <span id="imageAttachmentInfo">Ready</span>
+                  </div>
+                  <button class="icon-button image-remove-button" id="removeImageBtn" type="button" aria-label="Remove image">×</button>
+                </div>
+                <label class="composer-field">
+                  <span class="sr-only">Send text</span>
+                  <textarea id="sendTextInput" rows="4" placeholder="Enter to send text&#10;Shift+Enter for newline&#10;Paste/drop images as attachments"></textarea>
+                </label>
+                <input id="imageInput" type="file" accept="image/*" hidden />
+              </div>
               <div class="console-actions">
                 <button class="primary-button" id="sendTextBtn" type="submit">Send</button>
                 <button class="ghost-button" id="sendEnterBtn" type="button">Enter</button>
                 <button class="ghost-button" id="sendEscBtn" type="button">Esc</button>
                 <button class="ghost-button" id="sendCtrlCBtn" type="button">Ctrl+C</button>
                 <button class="ghost-button" id="sendCtrlDBtn" type="button">Ctrl+D</button>
+                <button class="ghost-button image-action-button mobile-image-action-button" id="attachImageBtn" type="button" aria-label="Attach image" title="Attach image">
+                  <svg class="image-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <rect x="3" y="5" width="18" height="14" rx="2"></rect>
+                    <circle cx="8.5" cy="10" r="1.5"></circle>
+                    <path d="m6 17 4.5-4.5 3.5 3.5 2-2 2.5 3"></path>
+                  </svg>
+                </button>
               </div>
             </form>
           </section>
@@ -242,31 +265,31 @@
             </div>
             <div class="preview-head-actions">
               <button class="mobile-back-button mobile-browser-back-button" id="mobileBrowserBackBtn" type="button">‹ KT Panel</button>
-              <button class="icon-button" id="pinBrowserBtn" type="button" aria-label="固定 Browser" aria-pressed="false">📌</button>
-              <button class="icon-button" id="closePreviewBtn" type="button" aria-label="隐藏 Browser">×</button>
+              <button class="icon-button" id="pinBrowserBtn" type="button" aria-label="Pin Browser" aria-pressed="false">📌</button>
+              <button class="icon-button" id="closePreviewBtn" type="button" aria-label="Hide Browser">×</button>
             </div>
           </div>
           <form class="browser-bar" id="browserAddressForm">
-            <button class="icon-button browser-nav-button" id="browserBackBtn" type="button" aria-label="返回上一个网址" disabled>‹</button>
-            <button class="icon-button browser-nav-button" id="browserForwardBtn" type="button" aria-label="前进到下一个网址" disabled>›</button>
+            <button class="icon-button browser-nav-button" id="browserBackBtn" type="button" aria-label="Back to previous URL" disabled>‹</button>
+            <button class="icon-button browser-nav-button" id="browserForwardBtn" type="button" aria-label="Forward to next URL" disabled>›</button>
             <label class="browser-address-field">
               <span class="sr-only">Browser URL</span>
-              <input id="browserAddressInput" type="text" spellcheck="false" autocomplete="off" placeholder="https://example.com 或 file:///tmp/report.html" />
+              <input id="browserAddressInput" type="text" spellcheck="false" autocomplete="off" placeholder="https://example.com or file:///tmp/report.html" />
             </label>
-            <select class="browser-history-select" id="browserHistorySelect" aria-label="浏览历史">
+            <select class="browser-history-select" id="browserHistorySelect" aria-label="Browser history">
               <option value="">History</option>
             </select>
             <button class="secondary-button browser-go-button" id="browserGoBtn" type="submit">Go</button>
           </form>
-          <div class="preview-address" id="previewAddress">点击 terminal 里的 URL，或在地址栏输入 URL。</div>
+          <div class="preview-address" id="previewAddress">Click a terminal URL or enter a URL in the address bar.</div>
           <iframe class="preview-frame" id="urlPreviewFrame" title="Embedded browser" sandbox="allow-forms allow-modals allow-popups allow-scripts"></iframe>
         </aside>
-        <button class="preview-reopen-button" id="reopenPreviewBtn" type="button" hidden aria-label="重新打开 Browser">Browser</button>
+        <button class="preview-reopen-button" id="reopenPreviewBtn" type="button" hidden aria-label="Reopen Browser">Browser</button>
       </div>
 
       <footer class="status-bar">
         <div class="status-group primary">
-          <span class="status-pill" id="targetHealth">未连接</span>
+          <span class="status-pill" id="targetHealth">Disconnected</span>
           <span id="statusTargetName">Target: -</span>
           <span id="statusSocketName">Socket: auto</span>
         </div>
@@ -282,23 +305,23 @@
           <div>
             <p class="section-kicker">Device Access</p>
             <h2>Kitty Remote Deck</h2>
-            <p class="auth-subtitle" id="authDeviceMeta">正在检查已保存的登录状态。</p>
+            <p class="auth-subtitle" id="authDeviceMeta">Checking saved sign-in state.</p>
           </div>
           <label>
             <span>Device Token</span>
             <input id="authTokenInput" type="password" autocomplete="current-password" spellcheck="false" required />
           </label>
           <button class="primary-button" type="submit">Sign In</button>
-          <p class="auth-status" id="authStatusText">正在认证…</p>
+          <p class="auth-status" id="authStatusText">Authenticating...</p>
         </form>
       </section>
       <div class="auth-toast" id="authToast" hidden></div>
     </div>
 
-    <script src="/modules/browser-utils.js?v=0.1.0-browser-composer-refactor-1"></script>
-    <script src="/modules/mobile-utils.js?v=0.1.0-browser-composer-refactor-1"></script>
-    <script src="/modules/preview-history.js?v=0.1.0-browser-composer-refactor-1"></script>
-    <script src="/modules/composer-utils.js?v=0.1.0-browser-composer-refactor-1"></script>
-    <script src="/app.js?v=0.1.0-browser-composer-refactor-1"></script>
+    <script src="/modules/browser-utils.js?v=0.1.0-image-composer-11"></script>
+    <script src="/modules/mobile-utils.js?v=0.1.0-image-composer-11"></script>
+    <script src="/modules/preview-history.js?v=0.1.0-image-composer-11"></script>
+    <script src="/modules/composer-utils.js?v=0.1.0-image-composer-11"></script>
+    <script src="/app.js?v=0.1.0-image-composer-11"></script>
   </body>
 </html>

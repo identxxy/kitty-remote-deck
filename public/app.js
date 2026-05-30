@@ -1,6 +1,6 @@
 const STORAGE_KEY = "kitty-remote-deck-ui";
 const DEBUG_STORAGE_KEY = "kitty-remote-deck-debug";
-const CLIENT_BUILD = "0.1.0-browser-composer-refactor-1";
+const CLIENT_BUILD = "0.1.0-image-composer-11";
 const MOBILE_HISTORY_KEY = "krdMobileScreen";
 const FONT_SIZE_RANGE = { min: 5, max: 18, default: 13 };
 const THEME_SET = new Set(["dark", "graphite", "light"]);
@@ -16,6 +16,15 @@ const ALL_TEXT_AUTO_REFRESH_EVERY_TICKS = 3;
 const WHEEL_SCROLL_DEBOUNCE_MS = 70;
 const WHEEL_SCROLL_MAX_LINES = 80;
 const MOBILE_AUTO_CONNECT_DELAY_MS = 1000;
+const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const SUPPORTED_IMAGE_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  "image/heic",
+  "image/heif"
+]);
 const BROWSER_UTILS = window.KRDBrowserUtils;
 const MOBILE_UTILS = window.KRDMobileUtils;
 const PREVIEW_HISTORY = window.KRDPreviewHistory;
@@ -60,7 +69,9 @@ const state = {
   resizeEnabled: false,
   sidebarWidth: 320,
   browserWidth: BROWSER_WIDTH_RANGE.default,
-  bottomPanelHeight: 230
+  bottomPanelHeight: 230,
+  imageAttachment: null,
+  composerSending: false
 };
 
 const elements = {
@@ -111,6 +122,7 @@ const elements = {
   editorPane: document.querySelector("#editorPane"),
   viewerMeta: document.querySelector("#viewerMeta"),
   screenOutput: document.querySelector("#screenOutput"),
+  bottomPanel: document.querySelector("#bottomPanel"),
   previewDrawer: document.querySelector("#previewDrawer"),
   previewTitle: document.querySelector("#previewTitle"),
   previewAddress: document.querySelector("#previewAddress"),
@@ -128,12 +140,22 @@ const elements = {
   screenModeBtn: document.querySelector("#screenModeBtn"),
   allTextModeBtn: document.querySelector("#allTextModeBtn"),
   refreshTextBtn: document.querySelector("#refreshTextBtn"),
+  sendTextBtn: document.querySelector("#sendTextBtn"),
   sendEnterBtn: document.querySelector("#sendEnterBtn"),
   sendEscBtn: document.querySelector("#sendEscBtn"),
   sendCtrlCBtn: document.querySelector("#sendCtrlCBtn"),
   sendCtrlDBtn: document.querySelector("#sendCtrlDBtn"),
   sendForm: document.querySelector("#sendForm"),
   sendTextInput: document.querySelector("#sendTextInput"),
+  composerStack: document.querySelector("#composerStack"),
+  attachImageHeadBtn: document.querySelector("#attachImageHeadBtn"),
+  attachImageBtn: document.querySelector("#attachImageBtn"),
+  imageInput: document.querySelector("#imageInput"),
+  imageAttachment: document.querySelector("#imageAttachment"),
+  imageAttachmentThumb: document.querySelector("#imageAttachmentThumb"),
+  imageAttachmentName: document.querySelector("#imageAttachmentName"),
+  imageAttachmentInfo: document.querySelector("#imageAttachmentInfo"),
+  removeImageBtn: document.querySelector("#removeImageBtn"),
   autoRefreshToggle: document.querySelector("#autoRefreshToggle"),
   statusTargetName: document.querySelector("#statusTargetName"),
   statusSocketName: document.querySelector("#statusSocketName"),
@@ -673,12 +695,12 @@ function scheduleMobileAutoConnect(options = {}) {
     }
 
     mobileAutoConnectInFlight = true;
-    setStatus("Auto Connect：正在连接上次目标…", "neutral");
+    setStatus("Auto Connect: connecting to the last target...", "neutral");
 
     try {
       await connectSelectedTarget({ source: "auto" });
     } catch (error) {
-      setTargetHealth("自动连接失败", "danger");
+      setTargetHealth("Auto Connect failed", "danger");
       setStatus(`Auto Connect failed: ${error.message}`, "danger");
     } finally {
       mobileAutoConnectInFlight = false;
@@ -773,7 +795,7 @@ function applyUiState() {
   elements.browserGoBtn.disabled = !state.selectedTargetId;
   elements.pinBrowserBtn.classList.toggle("active", state.previewPinned);
   elements.pinBrowserBtn.setAttribute("aria-pressed", String(state.previewPinned));
-  elements.pinBrowserBtn.title = state.previewPinned ? "取消固定 Browser" : "固定 Browser";
+  elements.pinBrowserBtn.title = state.previewPinned ? "Unpin Browser" : "Pin Browser";
   if (document.activeElement !== elements.browserAddressInput) {
     elements.browserAddressInput.value = state.previewUrl;
   }
@@ -791,8 +813,8 @@ function applyUiState() {
   elements.mobileTerminalWidthBtn.setAttribute("aria-pressed", String(state.mobileTerminalWidth === "wide"));
   elements.mobileTerminalWidthBtn.textContent = state.mobileTerminalWidth === "wide" ? "Wide" : "Fit";
   elements.mobileTerminalWidthBtn.title = state.mobileTerminalWidth === "wide"
-    ? "保持终端原始宽度，可横向滚动"
-    : "适配手机宽度，自动换行";
+    ? "Keep the terminal's original width and allow horizontal scrolling"
+    : "Fit terminal text to the phone width";
   elements.resizeToggle.checked = state.resizeEnabled;
   document.documentElement.style.setProperty("--root-font-size", `${state.uiFontSizePx}px`);
   document.documentElement.dataset.theme = state.uiTheme;
@@ -897,9 +919,9 @@ function getAuthDeviceText(device) {
   return `${label}${preview}`;
 }
 
-function setAuthDeviceMeta(device, fallback = "请输入这台设备对应的 token。") {
+function setAuthDeviceMeta(device, fallback = "Enter the token for this device.") {
   elements.authDeviceMeta.textContent = device
-    ? `当前 key：${getAuthDeviceText(device)}`
+    ? `Current key: ${getAuthDeviceText(device)}`
     : fallback;
 }
 
@@ -966,7 +988,7 @@ function renderScreenText(text, options = {}) {
 
   if (state.screenText !== nextText) {
     state.screenText = nextText;
-    output.innerHTML = linkifyTerminalText(state.screenText || "(当前屏幕为空)");
+    output.innerHTML = linkifyTerminalText(state.screenText || "(current screen is empty)");
   }
 
   if (state.screenExtent === "all") {
@@ -1003,6 +1025,120 @@ function handleScreenOutputScroll() {
   }
 }
 
+function formatBytes(bytes) {
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+  }
+  return `${Math.max(1, Math.round(bytes / 1024))} KiB`;
+}
+
+function getImageMimeType(file) {
+  return String(file?.type || "").split(";")[0].trim().toLowerCase();
+}
+
+function validateImageFile(file) {
+  if (!file) {
+    throw new Error("No image selected.");
+  }
+
+  const mimeType = getImageMimeType(file);
+  if (!SUPPORTED_IMAGE_TYPES.has(mimeType)) {
+    throw new Error("Only PNG, JPEG, WebP, GIF, HEIC, or HEIF images are supported.");
+  }
+
+  if (file.size > MAX_IMAGE_ATTACHMENT_BYTES) {
+    throw new Error(`Image is too large. The current limit is ${Math.floor(MAX_IMAGE_ATTACHMENT_BYTES / 1024 / 1024)} MiB.`);
+  }
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => resolve(String(reader.result || "")), { once: true });
+    reader.addEventListener("error", () => reject(reader.error || new Error("Failed to read image.")), { once: true });
+    reader.readAsDataURL(file);
+  });
+}
+
+function getBase64FromDataUrl(dataUrl) {
+  const marker = ";base64,";
+  const index = dataUrl.indexOf(marker);
+  return index >= 0 ? dataUrl.slice(index + marker.length) : dataUrl;
+}
+
+function renderImageAttachment() {
+  const attachment = state.imageAttachment;
+  elements.bottomPanel.classList.toggle("has-image-attachment", Boolean(attachment));
+  elements.sendForm.classList.toggle("has-image-attachment", Boolean(attachment));
+
+  if (!attachment) {
+    elements.imageAttachment.hidden = true;
+    elements.imageAttachmentThumb.removeAttribute("src");
+    elements.imageAttachmentName.textContent = "image";
+    elements.imageAttachmentInfo.textContent = "Ready";
+    return;
+  }
+
+  elements.imageAttachment.hidden = false;
+  elements.imageAttachmentThumb.src = attachment.dataUrl;
+  elements.imageAttachmentName.textContent = attachment.name;
+  elements.imageAttachmentInfo.textContent = `${attachment.type} · ${formatBytes(attachment.size)}`;
+}
+
+function setComposerBusy(isBusy) {
+  state.composerSending = Boolean(isBusy);
+  elements.sendForm.classList.toggle("composer-busy", state.composerSending);
+  elements.sendForm.setAttribute("aria-busy", String(state.composerSending));
+  elements.sendTextBtn.disabled = state.composerSending;
+  elements.sendEnterBtn.disabled = state.composerSending;
+  elements.sendEscBtn.disabled = state.composerSending;
+  elements.sendCtrlCBtn.disabled = state.composerSending;
+  elements.sendCtrlDBtn.disabled = state.composerSending;
+  elements.attachImageHeadBtn.disabled = state.composerSending;
+  elements.attachImageBtn.disabled = state.composerSending;
+  elements.removeImageBtn.disabled = state.composerSending;
+  elements.imageInput.disabled = state.composerSending;
+  elements.sendTextBtn.textContent = state.composerSending ? "Sending" : "Send";
+}
+
+async function attachImageFile(file) {
+  if (state.composerSending) {
+    setStatus("Previous input is still sending. Add the image after it finishes.", "neutral");
+    return;
+  }
+
+  validateImageFile(file);
+  const dataUrl = await readFileAsDataUrl(file);
+  state.imageAttachment = {
+    name: file.name || "image",
+    type: getImageMimeType(file),
+    size: file.size,
+    dataUrl,
+    base64: getBase64FromDataUrl(dataUrl)
+  };
+  renderImageAttachment();
+  setStatus(`Image ${state.imageAttachment.name} attached.`, "success");
+}
+
+function clearImageAttachment() {
+  state.imageAttachment = null;
+  elements.imageInput.value = "";
+  renderImageAttachment();
+}
+
+function getImageFileFromDataTransfer(dataTransfer) {
+  const files = Array.from(dataTransfer?.files || []);
+  return files.find((file) => getImageMimeType(file).startsWith("image/")) || null;
+}
+
+function openImagePicker() {
+  if (state.composerSending) {
+    setStatus("Previous input is still sending. Add the image after it finishes.", "neutral");
+    return;
+  }
+  elements.imageInput.click();
+}
+
 async function apiFetch(url, options = {}) {
   const response = await fetch(url, {
     credentials: "same-origin",
@@ -1012,29 +1148,29 @@ async function apiFetch(url, options = {}) {
 
   if (response.status === 401) {
     setAuthState(false);
-    setAuthStatus("登录已失效，请重新输入这台设备的 token。", "danger");
+    setAuthStatus("Sign-in expired. Enter this device's token again.", "danger");
     throw new Error(payload.error || "Authentication required.");
   }
 
   if (!response.ok) {
-    throw new Error(payload.error || "请求失败。");
+    throw new Error(payload.error || "Request failed.");
   }
   return payload;
 }
 
 async function checkAuthStatus() {
   setAuthState(false);
-  setAuthStatus("正在检查已保存的登录状态…", "neutral");
-  setAuthDeviceMeta(null, "如果这台设备已经登录，会自动进入工作区。");
+  setAuthStatus("Checking saved sign-in state...", "neutral");
+  setAuthDeviceMeta(null, "If this device is already signed in, the workspace will open automatically.");
   const payload = await apiFetch("/api/auth/status");
   setAuthState(Boolean(payload.authenticated), payload.device || null);
   if (state.authenticated) {
     const deviceText = getAuthDeviceText(state.authDevice);
-    setAuthStatus(`认证成功：${deviceText}`, "success");
-    showAuthToast(`认证成功：${deviceText}`);
+    setAuthStatus(`Authenticated: ${deviceText}`, "success");
+    showAuthToast(`Authenticated: ${deviceText}`);
   } else {
-    setAuthStatus("需要认证：请输入这台设备对应的 token。", "neutral");
-    setAuthDeviceMeta(null, "尚未认证。请输入管理员为这台设备创建的 token。");
+    setAuthStatus("Authentication required: enter this device's token.", "neutral");
+    setAuthDeviceMeta(null, "Not authenticated. Enter the token created for this device.");
   }
   return state.authenticated;
 }
@@ -1043,7 +1179,7 @@ async function loginWithDeviceToken() {
   const token = elements.authTokenInput.value.trim();
 
   if (!token) {
-    setAuthStatus("请输入 device token。", "danger");
+    setAuthStatus("Enter a device token.", "danger");
     return;
   }
 
@@ -1056,8 +1192,8 @@ async function loginWithDeviceToken() {
   elements.authTokenInput.value = "";
   setAuthState(true, payload.device);
   const deviceText = getAuthDeviceText(payload.device);
-  setAuthStatus(`认证成功：${deviceText}`, "success");
-  showAuthToast(`认证成功：${deviceText}`);
+  setAuthStatus(`Authenticated: ${deviceText}`, "success");
+  showAuthToast(`Authenticated: ${deviceText}`);
   await bootAuthenticatedWorkspace();
 }
 
@@ -1070,8 +1206,8 @@ async function logoutDevice() {
   clearSessionSelection();
   renderTargetSelect();
   renderSavedTargets();
-  setAuthStatus("已退出。请输入 device token 重新认证。", "neutral");
-  setAuthDeviceMeta(null, "当前没有已认证 key。");
+  setAuthStatus("Signed out. Enter a device token to sign in again.", "neutral");
+  setAuthDeviceMeta(null, "No authenticated key is active.");
 }
 
 function normalizeTransport(value) {
@@ -1092,7 +1228,7 @@ function syncTargetTransportFormState() {
   const sshField = elements.targetSsh.closest("label");
   elements.targetSsh.disabled = !isSsh;
   elements.targetSsh.required = isSsh;
-  elements.targetSsh.placeholder = isSsh ? "ssh-host" : "Local 不需要 SSH 目标";
+  elements.targetSsh.placeholder = isSsh ? "ssh-host" : "Local targets do not need an SSH host";
   if (sshField) {
     sshField.hidden = !isSsh;
   }
@@ -1129,7 +1265,7 @@ function writeTargetForm(target) {
 
 function renderTargetSelect() {
   if (!state.targets.length) {
-    elements.targetSelect.innerHTML = `<option value="">没有保存的目标</option>`;
+    elements.targetSelect.innerHTML = `<option value="">No saved targets</option>`;
     elements.targetSelect.disabled = true;
     return;
   }
@@ -1153,7 +1289,7 @@ function renderTargetSelect() {
 
 function renderSavedTargets() {
   if (!state.targets.length) {
-    elements.savedTargets.innerHTML = `<p class="empty-note">还没有保存的目标。</p>`;
+    elements.savedTargets.innerHTML = `<p class="empty-note">No saved targets yet.</p>`;
     return;
   }
 
@@ -1181,13 +1317,13 @@ function renderSavedTargets() {
       writeTargetForm(target);
       renderSavedTargets();
       renderTargetSelect();
-      setTargetHealth("待连接", "neutral");
+      setTargetHealth("Ready to connect", "neutral");
       await apiFetch("/api/targets/select", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ targetId })
       });
-      setStatus(`已切换到 ${target.name}，顶部下拉菜单也已同步。`, "neutral");
+      setStatus(`Switched to ${target.name}; the top selector is synced.`, "neutral");
     });
   });
 }
@@ -1285,11 +1421,11 @@ function renderSessions() {
   const selectedTarget = getSelectedTarget();
 
   elements.sessionSummary.textContent = selectedTarget
-    ? `${selectedTarget.name} · ${state.sessionTree.length} 个 OS 窗口 / ${totalWindows} 个 panes`
-    : "先从顶部选择一个目标，然后连接。";
+    ? `${selectedTarget.name} · ${state.sessionTree.length} OS windows / ${totalWindows} panes`
+    : "Choose a target from the top selector, then connect.";
 
   if (!state.sessionTree.length) {
-    elements.sessionTree.innerHTML = `<div class="empty-note">还没有 kitty 会话数据。点击顶部的“连接”开始加载。</div>`;
+    elements.sessionTree.innerHTML = `<div class="empty-note">No kitty session data yet. Click Connect to load sessions.</div>`;
     renderMobilePaneSwitcher();
     return;
   }
@@ -1342,7 +1478,7 @@ function renderSessions() {
           <div class="os-window-head">
             <div>
               <h3>OS Window #${osWindow.id}</h3>
-              <small>${osWindow.is_focused ? "当前聚焦" : "后台窗口"}</small>
+              <small>${osWindow.is_focused ? "focused now" : "background window"}</small>
             </div>
             <span>${(osWindow.tabs || []).length} tabs</span>
           </div>
@@ -1410,7 +1546,7 @@ function renderSocketOptions(sockets, selectedSocket) {
   const safeSockets = sockets?.length ? sockets : [""];
   elements.socketSelect.innerHTML = safeSockets
     .map((socket) => {
-      const label = socket || "自动选择最新 socket";
+      const label = socket || "Auto-select latest socket";
       const selected = socket === selectedSocket ? "selected" : "";
       return `<option value="${escapeAttribute(socket)}" ${selected}>${escapeHtml(label)}</option>`;
     })
@@ -1424,7 +1560,7 @@ function renderViewerMeta() {
   const windowInfo = state.flatWindows.find((window) => Number(window.id) === Number(state.selectedWindowId));
 
   if (!windowInfo) {
-    elements.viewerMeta.textContent = "选中一个 pane 后，这里会显示它的标题和目录。";
+    elements.viewerMeta.textContent = "Select a pane to show its title and directory.";
     return;
   }
 
@@ -1459,7 +1595,7 @@ function toggleBrowserPin() {
 
 function reopenPreview() {
   if (!state.previewUrl) {
-    setPreviewStatus("还没有 Browser URL。", "neutral");
+    setPreviewStatus("No Browser URL yet.", "neutral");
     return;
   }
 
@@ -1525,7 +1661,7 @@ async function loadUrlPreview(rawUrl, options = {}) {
   const target = getSelectedTarget();
 
   if (!target) {
-    setPreviewStatus("先选择一个连接目标。", "warning");
+    setPreviewStatus("Choose a connection target first.", "warning");
     return;
   }
 
@@ -1536,11 +1672,11 @@ async function loadUrlPreview(rawUrl, options = {}) {
   syncPreviewFrame();
   if (isMobileViewport() && state.mobileScreen === "chat") {
     setMobileScreen("browser");
-    setPreviewStatus(`正在通过 ${target.name} 打开 ${url}`, "neutral");
+    setPreviewStatus(`Opening ${url} through ${target.name}...`, "neutral");
     return;
   }
   applyUiState();
-  setPreviewStatus(`正在通过 ${target.name} 打开 ${url}`, "neutral");
+  setPreviewStatus(`Opening ${url} through ${target.name}...`, "neutral");
 }
 
 function maybeCloseUnpinnedBrowser(event) {
@@ -1587,7 +1723,7 @@ function handleBrowserMessage(event) {
     try {
       const url = normalizeBrowserUrl(message.url);
       replaceLoadedPreviewUrl(url);
-      setPreviewStatus(`已加载 ${url}`, "neutral");
+      setPreviewStatus(`Loaded ${url}`, "neutral");
       applyUiState();
     } catch (error) {
       setPreviewStatus(error.message, "danger");
@@ -1603,6 +1739,7 @@ function clearSessionSelection() {
   state.selectedWindowId = null;
   state.screenText = "";
   state.allTextFollowTail = true;
+  state.imageAttachment = null;
   if (isMobileViewport()) {
     state.mobileScreen = "connect";
     state.activeSidebarView = "ssh";
@@ -1611,7 +1748,8 @@ function clearSessionSelection() {
   renderSocketOptions([], "");
   renderSessions();
   renderViewerMeta();
-  elements.screenOutput.textContent = "等待选择一个 kitty pane…";
+  renderImageAttachment();
+  elements.screenOutput.textContent = "Waiting for a kitty pane...";
   updateStatusBar();
 }
 
@@ -1646,7 +1784,7 @@ async function saveTarget() {
   state.editingTargetId = data.target.id;
   await loadTargets();
   renderTargetSelect();
-  setStatus(`目标 ${data.target.name} 已保存。之后可以直接从顶栏切换。`, "success");
+  setStatus(`Target ${data.target.name} saved. You can switch to it from the top selector.`, "success");
 }
 
 async function testTargetRequest(requestBody) {
@@ -1656,11 +1794,11 @@ async function testTargetRequest(requestBody) {
     body: JSON.stringify(requestBody)
   });
 
-  setTargetHealth("连接正常", "success");
+  setTargetHealth("Connection OK", "success");
   renderSocketOptions(result.sockets || [], result.selectedSocket || "");
   state.selectedSocket = result.selectedSocket || "";
   setStatus(
-    `${result.host} / ${result.user}：发现 ${result.sockets.length} 个 socket，${result.windowCount} 个 panes。`,
+    `${result.host} / ${result.user}: found ${result.sockets.length} sockets and ${result.windowCount} panes.`,
     "success"
   );
 
@@ -1676,7 +1814,7 @@ async function testDraftTarget() {
 
 async function connectSelectedTarget(options = {}) {
   if (!state.selectedTargetId) {
-    setStatus("先保存一个连接目标。", "warning");
+    setStatus("Save a connection target first.", "warning");
     return;
   }
 
@@ -1698,7 +1836,7 @@ async function connectSelectedTarget(options = {}) {
 
 async function loadSessions(options = {}) {
   if (!state.selectedTargetId) {
-    setStatus("先从顶部选择一个连接目标。", "warning");
+    setStatus("Choose a connection target from the top selector first.", "warning");
     return;
   }
 
@@ -1750,7 +1888,7 @@ async function loadSessions(options = {}) {
 
   renderSessions();
   renderViewerMeta();
-  setTargetHealth("已连接", "success");
+  setTargetHealth("Connected", "success");
   updateStatusBar();
   sendClientDebug("loadSessions:rendered", null, { force: true });
 
@@ -1762,12 +1900,12 @@ async function loadSessions(options = {}) {
       });
     } else if (selectedWindowChanged) {
       state.screenText = "";
-      elements.screenOutput.textContent = "当前 pane 已变化，点击 Refresh 更新内容。";
+      elements.screenOutput.textContent = "The current pane changed. Click Refresh to update content.";
     }
   } else if (!state.selectedWindowId) {
     elements.screenOutput.textContent = deferPaneRefresh
-      ? "选择一个 Session 后再加载 pane 内容。"
-      : "当前没有可显示的 pane。";
+      ? "Select a session before loading pane content."
+      : "No pane is available to display.";
   }
 }
 
@@ -1841,7 +1979,7 @@ function queueRemoteScrollFromWheel(event) {
   event.stopImmediatePropagation();
 
   if (!state.selectedTargetId || !state.selectedWindowId) {
-    setStatus("先选中一个 pane。", "warning");
+    setStatus("Select a pane first.", "warning");
     return;
   }
 
@@ -1908,7 +2046,7 @@ async function scrollRemoteWindow(lines) {
       state.screenExtent === "screen"
     ) {
       renderScreenText(data.text || "");
-      setStatus(`已滚动 pane #${state.selectedWindowId} ${Math.abs(lines)} 行。`, "success");
+      setStatus(`Scrolled pane #${state.selectedWindowId} by ${Math.abs(lines)} lines.`, "success");
     }
   } finally {
     if (requestSerial === screenRequestSerial) {
@@ -1919,13 +2057,13 @@ async function scrollRemoteWindow(lines) {
 
 async function sendText(options = {}) {
   if (!state.selectedTargetId || !state.selectedWindowId) {
-    setStatus("先选中一个 pane。", "warning");
+    setStatus("Select a pane first.", "warning");
     return false;
   }
 
   const text = elements.sendTextInput.value;
   if (text.length === 0) {
-    setStatus("输入点内容再发。", "warning");
+    setStatus("Type something before sending.", "warning");
     return false;
   }
 
@@ -1943,8 +2081,8 @@ async function sendText(options = {}) {
 
   setStatus(
     options.appendNewline
-      ? `已向 pane #${state.selectedWindowId} 发送文本并提交。`
-      : `已向 pane #${state.selectedWindowId} 发送文本。`,
+      ? `Text sent to pane #${state.selectedWindowId} and submitted.`
+      : `Text sent to pane #${state.selectedWindowId}.`,
     "success"
   );
   elements.sendTextInput.value = "";
@@ -1952,9 +2090,68 @@ async function sendText(options = {}) {
   return true;
 }
 
+async function sendImageAttachment(options = {}) {
+  if (!state.selectedTargetId || !state.selectedWindowId) {
+    setStatus("Select a pane first.", "warning");
+    return false;
+  }
+
+  const attachment = state.imageAttachment;
+  if (!attachment) {
+    setStatus("Attach an image first.", "warning");
+    return false;
+  }
+
+  const text = elements.sendTextInput.value;
+  setStatus(`Uploading and sending ${attachment.name}...`, "neutral");
+  const data = await apiFetch("/api/send-image", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      targetId: state.selectedTargetId,
+      socket: state.selectedSocket,
+      windowId: state.selectedWindowId,
+      text,
+      imageBase64: attachment.base64,
+      fileName: attachment.name,
+      mimeType: attachment.type,
+      appendNewline: Boolean(options.appendNewline)
+    })
+  });
+
+  setStatus(
+    options.appendNewline
+      ? `Image ${attachment.name} sent and submitted.`
+      : `Image ${attachment.name} sent.`,
+    "success"
+  );
+  elements.sendTextInput.value = "";
+  clearImageAttachment();
+  await refreshScreen({ scrollToBottom: true });
+  return data;
+}
+
+async function sendComposerPayload(options = {}) {
+  if (state.composerSending) {
+    setStatus("Previous input is still sending. Please wait.", "neutral");
+    return false;
+  }
+
+  setComposerBusy(true);
+  try {
+    if (state.imageAttachment) {
+      return await sendImageAttachment(options);
+    }
+
+    return await sendText(options);
+  } finally {
+    setComposerBusy(false);
+  }
+}
+
 async function sendKey(key) {
   if (!state.selectedTargetId || !state.selectedWindowId) {
-    setStatus("先选中一个 pane。", "warning");
+    setStatus("Select a pane first.", "warning");
     return;
   }
 
@@ -1969,13 +2166,13 @@ async function sendKey(key) {
     })
   });
 
-  setStatus(`已发送按键 ${key} 到 pane #${state.selectedWindowId}。`, "success");
+  setStatus(`Sent key ${key} to pane #${state.selectedWindowId}.`, "success");
   await refreshScreen({ scrollToBottom: true });
 }
 
 async function focusWindow() {
   if (!state.selectedTargetId || !state.selectedWindowId) {
-    setStatus("先选中一个 pane。", "warning");
+    setStatus("Select a pane first.", "warning");
     return;
   }
 
@@ -1989,11 +2186,23 @@ async function focusWindow() {
     })
   });
 
-  setStatus(`已请求聚焦 pane #${state.selectedWindowId}。`, "success");
+  setStatus(`Requested focus for pane #${state.selectedWindowId}.`, "success");
 }
 
 async function sendComposerShortcut() {
-  const action = COMPOSER_UTILS.getEnterAction(elements.sendTextInput.value);
+  if (state.composerSending) {
+    setStatus("Previous input is still sending. Please wait.", "neutral");
+    return;
+  }
+
+  const action = COMPOSER_UTILS.getEnterAction(elements.sendTextInput.value, {
+    hasImage: Boolean(state.imageAttachment)
+  });
+
+  if (action.type === "send-composer") {
+    await sendComposerPayload({ appendNewline: action.appendNewline });
+    return;
+  }
 
   if (action.type === "send-text") {
     await sendText({ appendNewline: action.appendNewline });
@@ -2024,8 +2233,8 @@ async function setScreenExtent(extent) {
   await refreshScreen({ force: true, scrollToBottom: nextExtent === "all", scrollToTop: nextExtent === "screen" });
   setStatus(
     nextExtent === "all"
-      ? "已切换到 All：显示 screen + scrollback，滚轮在网页内滚动。"
-      : "已切换到 Screen：滚轮控制 kitty viewport。",
+      ? "Switched to All: showing screen + scrollback; wheel scrolls in the browser."
+      : "Switched to Screen: wheel controls the kitty viewport.",
     "neutral"
   );
 }
@@ -2034,8 +2243,8 @@ function resetTargetDraft() {
   cancelMobileAutoConnect({ suppress: true });
   state.editingTargetId = "";
   writeTargetForm(DEFAULT_TARGET_FORM);
-  setTargetHealth("待连接", "neutral");
-  setStatus("正在新建目标。保存后会出现在顶栏下拉菜单里。", "neutral");
+  setTargetHealth("Ready to connect", "neutral");
+  setStatus("Creating a new target. Save it to make it available in the top selector.", "neutral");
 }
 
 function restartPolling() {
@@ -2057,7 +2266,7 @@ function restartPolling() {
       await runAutoRefreshTick();
     } catch (error) {
       setStatus(error.message, "danger");
-      setTargetHealth("连接异常", "danger");
+      setTargetHealth("Connection issue", "danger");
     }
   }, AUTO_REFRESH_MS);
 }
@@ -2212,16 +2421,16 @@ function attachEvents() {
   elements.authForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      setAuthStatus("正在登录…", "neutral");
+      setAuthStatus("Signing in...", "neutral");
       await loginWithDeviceToken();
     } catch (error) {
       if (!state.authenticated) {
         setAuthState(false);
-        setAuthStatus(`认证失败：${error.message}`, "danger");
-        setAuthDeviceMeta(null, "请确认 token 是否属于这台设备，或让管理员重新创建/轮换 token。");
+        setAuthStatus(`Authentication failed: ${error.message}`, "danger");
+        setAuthDeviceMeta(null, "Confirm that the token belongs to this device, or ask an administrator to create or rotate it.");
       } else {
-        setAuthStatus(`认证成功，但工作区加载失败：${error.message}`, "danger");
-        showAuthToast(`工作区加载失败：${error.message}`, "danger");
+        setAuthStatus(`Authenticated, but workspace loading failed: ${error.message}`, "danger");
+        showAuthToast(`Workspace loading failed: ${error.message}`, "danger");
       }
     }
   });
@@ -2248,7 +2457,7 @@ function attachEvents() {
   elements.reloadTargetsBtn.addEventListener("click", async () => {
     try {
       await loadTargets();
-      setStatus("目标列表已刷新。", "neutral");
+      setStatus("Target list refreshed.", "neutral");
     } catch (error) {
       setStatus(error.message, "danger");
     }
@@ -2278,7 +2487,7 @@ function attachEvents() {
     try {
       await connectSelectedTarget();
     } catch (error) {
-      setTargetHealth("连接失败", "danger");
+      setTargetHealth("Connection failed", "danger");
       setStatus(error.message, "danger");
     }
   });
@@ -2339,7 +2548,7 @@ function attachEvents() {
     try {
       await testDraftTarget();
     } catch (error) {
-      setTargetHealth("测试失败", "danger");
+      setTargetHealth("Test failed", "danger");
       setStatus(error.message, "danger");
     }
   });
@@ -2348,7 +2557,7 @@ function attachEvents() {
     try {
       await connectSelectedTarget();
     } catch (error) {
-      setTargetHealth("连接失败", "danger");
+      setTargetHealth("Connection failed", "danger");
       setStatus(error.message, "danger");
     }
   });
@@ -2357,7 +2566,7 @@ function attachEvents() {
     try {
       await loadSessions({ forceRefresh: true, scrollToBottom: state.screenExtent === "all" });
     } catch (error) {
-      setTargetHealth("刷新失败", "danger");
+      setTargetHealth("Refresh failed", "danger");
       setStatus(error.message, "danger");
     }
   });
@@ -2366,7 +2575,7 @@ function attachEvents() {
     try {
       await loadSessions({ forceRefresh: true, scrollToBottom: state.screenExtent === "all" });
     } catch (error) {
-      setTargetHealth("刷新失败", "danger");
+      setTargetHealth("Refresh failed", "danger");
       setStatus(error.message, "danger");
     }
   });
@@ -2379,7 +2588,7 @@ function attachEvents() {
 
     writeTargetForm(target);
     renderSavedTargets();
-    setTargetHealth("切换中", "neutral");
+    setTargetHealth("Switching", "neutral");
 
     try {
       await apiFetch("/api/targets/select", {
@@ -2387,13 +2596,13 @@ function attachEvents() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ targetId: state.selectedTargetId })
       });
-      setStatus(`已切换到 ${target.name}。`, "neutral");
+      setStatus(`Switched to ${target.name}.`, "neutral");
       await loadSessions({ forceRefresh: true, scrollToBottom: state.screenExtent === "all" });
       if (isMobileViewport()) {
         setMobileScreen("sessions");
       }
     } catch (error) {
-      setTargetHealth("切换失败", "danger");
+      setTargetHealth("Switch failed", "danger");
       setStatus(error.message, "danger");
     }
   });
@@ -2404,7 +2613,7 @@ function attachEvents() {
     try {
       await loadSessions({ forceRefresh: true, scrollToBottom: state.screenExtent === "all" });
     } catch (error) {
-      setTargetHealth("切换失败", "danger");
+      setTargetHealth("Switch failed", "danger");
       setStatus(error.message, "danger");
     }
   });
@@ -2458,7 +2667,7 @@ function attachEvents() {
 
   elements.urlPreviewFrame.addEventListener("load", () => {
     if (state.previewVisible && state.previewUrl) {
-      elements.previewAddress.textContent = `已加载 ${state.previewUrl}`;
+      elements.previewAddress.textContent = `Loaded ${state.previewUrl}`;
     }
   });
 
@@ -2501,7 +2710,65 @@ function attachEvents() {
   elements.sendForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      await sendText();
+      await sendComposerPayload();
+    } catch (error) {
+      setStatus(error.message, "danger");
+    }
+  });
+
+  elements.attachImageHeadBtn.addEventListener("click", openImagePicker);
+  elements.attachImageBtn.addEventListener("click", openImagePicker);
+
+  elements.imageInput.addEventListener("change", async () => {
+    const file = elements.imageInput.files?.[0];
+    try {
+      await attachImageFile(file);
+    } catch (error) {
+      elements.imageInput.value = "";
+      setStatus(error.message, "danger");
+    }
+  });
+
+  elements.removeImageBtn.addEventListener("click", () => {
+    clearImageAttachment();
+    setStatus("Pending image removed.", "neutral");
+  });
+
+  elements.sendTextInput.addEventListener("paste", async (event) => {
+    const file = getImageFileFromDataTransfer(event.clipboardData);
+    if (!file) {
+      return;
+    }
+
+    event.preventDefault();
+    try {
+      await attachImageFile(file);
+    } catch (error) {
+      setStatus(error.message, "danger");
+    }
+  });
+
+  elements.sendForm.addEventListener("dragover", (event) => {
+    if (getImageFileFromDataTransfer(event.dataTransfer)) {
+      event.preventDefault();
+      elements.sendForm.classList.add("dragging-image");
+    }
+  });
+
+  elements.sendForm.addEventListener("dragleave", () => {
+    elements.sendForm.classList.remove("dragging-image");
+  });
+
+  elements.sendForm.addEventListener("drop", async (event) => {
+    const file = getImageFileFromDataTransfer(event.dataTransfer);
+    if (!file) {
+      return;
+    }
+
+    event.preventDefault();
+    elements.sendForm.classList.remove("dragging-image");
+    try {
+      await attachImageFile(file);
     } catch (error) {
       setStatus(error.message, "danger");
     }
@@ -2547,7 +2814,7 @@ async function bootAuthenticatedWorkspace() {
   renderSocketOptions([], "");
   renderSessions();
   renderViewerMeta();
-  setTargetHealth("待连接", "neutral");
+  setTargetHealth("Ready to connect", "neutral");
   restartPolling();
   scheduleMobileAutoConnect({ resetSuppression: true });
 }
@@ -2565,7 +2832,7 @@ async function init() {
   if (authenticated) {
     await bootAuthenticatedWorkspace();
   } else {
-    setAuthStatus("请输入这台设备对应的 token。", "neutral");
+    setAuthStatus("Enter the token for this device.", "neutral");
     elements.authTokenInput.focus();
   }
 }
@@ -2574,5 +2841,5 @@ init().catch((error) => {
   setAuthState(false);
   setStatus(error.message, "danger");
   setAuthStatus(error.message, "danger");
-  setAuthDeviceMeta(null, "认证状态检查失败，请稍后重试或重新输入 token。");
+  setAuthDeviceMeta(null, "Authentication status check failed. Try again later or enter the token again.");
 });

@@ -55,7 +55,7 @@
     const value = String(rawUrl || "").trim();
 
     if (!value) {
-      throw new Error("URL 为空。");
+      throw new Error("URL is empty.");
     }
 
     const schemeMatch = value.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/);
@@ -66,7 +66,7 @@
 
       const parsed = new URL(value);
       if (!["http:", "https:", "file:"].includes(parsed.protocol)) {
-        throw new Error("只支持 http://, https:// 和 file:// URL。");
+        throw new Error("Only http://, https://, and file:// URLs are supported.");
       }
       return parsed.href;
     }

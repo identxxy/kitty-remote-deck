@@ -19,6 +19,11 @@ const {
   rewriteCssResources,
   rewriteHtmlResources
 } = require("./server/url_proxy");
+const {
+  MAX_IMAGE_BYTES,
+  createComposerImageText,
+  uploadImageToTarget
+} = require("./server/image_upload");
 
 const PORT = Number(process.env.PORT || 3040);
 const HOST = process.env.HOST || process.env.BIND_HOST || "127.0.0.1";
@@ -30,6 +35,7 @@ const AUTH_FILE = process.env.KRD_AUTH_FILE || path.join(DATA_DIR, "auth.json");
 const CLIENT_DEBUG_LOG_FILE = path.join(TMP_DIR, "client-debug.log");
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
 const REMOTE_HELPER_PATH = path.join(ROOT_DIR, "server", "remote_helper.py");
+const MAX_IMAGE_REQUEST_BYTES = Math.ceil(MAX_IMAGE_BYTES * 1.6);
 const authManager = createAuthManager(AUTH_FILE);
 
 const DEFAULT_TARGET = {
@@ -190,10 +196,16 @@ async function appendClientDebugLog(payload, request) {
   await fsp.appendFile(CLIENT_DEBUG_LOG_FILE, `${JSON.stringify(entry)}\n`);
 }
 
-async function parseRequestBody(request) {
+async function parseRequestBody(request, options = {}) {
   const chunks = [];
+  let totalBytes = 0;
+  const maxBytes = options.maxBytes || 0;
 
   for await (const chunk of request) {
+    totalBytes += chunk.length;
+    if (maxBytes && totalBytes > maxBytes) {
+      throw new Error(`Request body is too large. Limit is ${Math.floor(maxBytes / 1024 / 1024)} MiB.`);
+    }
     chunks.push(chunk);
   }
 
@@ -558,6 +570,41 @@ async function handleApi(request, response, requestUrl) {
         25000
       );
       sendJson(response, 200, data);
+      return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/api/send-image") {
+      const body = await parseRequestBody(request, { maxBytes: MAX_IMAGE_REQUEST_BYTES });
+      const target = await resolveTargetFromRequest(body);
+      const windowId = parseWindowId(body.windowId);
+      const image = await uploadImageToTarget(target, {
+        imageBase64: body.imageBase64 || body.dataUrl || "",
+        fileName: body.fileName || "image",
+        mimeType: body.mimeType || ""
+      });
+      const text = createComposerImageText({
+        text: body.text || "",
+        fileName: body.fileName || image.fileName,
+        fileUrl: image.fileUrl
+      });
+
+      const data = await runRemoteKittyAction(
+        target,
+        "send_text",
+        {
+          socket: body.socket || "",
+          windowId,
+          text,
+          appendNewline: Boolean(body.appendNewline)
+        },
+        25000
+      );
+
+      sendJson(response, 200, {
+        ...data,
+        image,
+        sentTextLength: text.length + (body.appendNewline ? 1 : 0)
+      });
       return;
     }
 

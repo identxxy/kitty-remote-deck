@@ -13,6 +13,10 @@
 - Preserved mobile pane output while Browser is open and refresh the selected pane immediately when returning to KT Panel.
 - Reset Browser history when opening a URL from the KT Panel, so root Back returns to the KT Panel and unrelated pane/topic links do not share one Back stack.
 - Split Browser URL-stack and Input Console Enter-key decisions into frontend helper modules to prepare for richer composer actions.
+- Added first-pass image attachments in the Input Console, saving images on the active target and sending Markdown file references to the selected pane.
+- Improved image-attachment composer layout and added a sending state to prevent duplicate image submissions while upload is in flight.
+- Changed image upload storage to the user-visible target-side `~/Pictures/voxpress/YYYYMMDD/` directory, with `KRD_IMAGE_UPLOAD_DIR` support for overriding the root.
+- Moved the desktop image picker to the Input Console header, kept the mobile image action in the bottom action row, and standardized user-facing UI copy in English.
 
 ## v0.1.0 - Initial Release
 
