@@ -1,6 +1,6 @@
 const STORAGE_KEY = "kitty-remote-deck-ui";
 const DEBUG_STORAGE_KEY = "kitty-remote-deck-debug";
-const CLIENT_BUILD = "0.1.0-browser-root-history-1";
+const CLIENT_BUILD = "0.1.0-browser-composer-refactor-1";
 const MOBILE_HISTORY_KEY = "krdMobileScreen";
 const FONT_SIZE_RANGE = { min: 5, max: 18, default: 13 };
 const THEME_SET = new Set(["dark", "graphite", "light"]);
@@ -18,6 +18,8 @@ const WHEEL_SCROLL_MAX_LINES = 80;
 const MOBILE_AUTO_CONNECT_DELAY_MS = 1000;
 const BROWSER_UTILS = window.KRDBrowserUtils;
 const MOBILE_UTILS = window.KRDMobileUtils;
+const PREVIEW_HISTORY = window.KRDPreviewHistory;
+const COMPOSER_UTILS = window.KRDComposerUtils;
 
 const DEFAULT_TARGET_FORM = {
   name: "Local Kitty",
@@ -832,49 +834,27 @@ function normalizeBrowserUrl(rawUrl) {
   return BROWSER_UTILS.normalizeBrowserUrl(rawUrl);
 }
 
+function getPreviewHistoryState() {
+  return PREVIEW_HISTORY.createState(state.previewHistory, state.previewHistoryIndex, state.previewUrl);
+}
+
+function applyPreviewHistoryState(nextState) {
+  if (!nextState) {
+    return false;
+  }
+
+  state.previewHistory = nextState.items;
+  state.previewHistoryIndex = nextState.index;
+  state.previewUrl = nextState.url;
+  return true;
+}
+
 function rememberPreviewUrl(url, mode = "push") {
-  if (mode === "none") {
-    return;
-  }
-
-  if (mode === "reset") {
-    state.previewHistory = [url];
-    state.previewHistoryIndex = 0;
-    state.previewUrl = url;
-    return;
-  }
-
-  if (mode === "replace" && state.previewHistoryIndex >= 0) {
-    state.previewHistory[state.previewHistoryIndex] = url;
-    state.previewUrl = url;
-    return;
-  }
-
-  if (state.previewHistory[state.previewHistoryIndex] === url) {
-    state.previewUrl = url;
-    return;
-  }
-
-  const nextHistory = state.previewHistory.slice(0, state.previewHistoryIndex + 1);
-  nextHistory.push(url);
-  state.previewHistory = nextHistory.slice(-30);
-  state.previewHistoryIndex = state.previewHistory.length - 1;
-  state.previewUrl = url;
+  applyPreviewHistoryState(PREVIEW_HISTORY.remember(getPreviewHistoryState(), url, mode));
 }
 
 function replaceLoadedPreviewUrl(url) {
-  if (!url || url === state.previewUrl) {
-    return;
-  }
-
-  if (state.previewHistoryIndex >= 0) {
-    state.previewHistory[state.previewHistoryIndex] = url;
-  } else {
-    state.previewHistory = [url];
-    state.previewHistoryIndex = 0;
-  }
-
-  state.previewUrl = url;
+  applyPreviewHistoryState(PREVIEW_HISTORY.replaceLoaded(getPreviewHistoryState(), url));
 }
 
 function syncPreviewFrame() {
@@ -1493,13 +1473,13 @@ function reopenPreview() {
 }
 
 function goBackPreview() {
-  if (state.previewHistoryIndex <= 0) {
+  const nextHistory = PREVIEW_HISTORY.goBack(getPreviewHistoryState());
+  if (!nextHistory) {
     closePreview();
     return;
   }
 
-  state.previewHistoryIndex -= 1;
-  state.previewUrl = state.previewHistory[state.previewHistoryIndex] || "";
+  applyPreviewHistoryState(nextHistory);
   state.previewVisible = true;
   syncPreviewFrame();
   if (isMobileViewport() && state.mobileScreen === "chat") {
@@ -1510,12 +1490,12 @@ function goBackPreview() {
 }
 
 function goForwardPreview() {
-  if (state.previewHistoryIndex < 0 || state.previewHistoryIndex >= state.previewHistory.length - 1) {
+  const nextHistory = PREVIEW_HISTORY.goForward(getPreviewHistoryState());
+  if (!nextHistory) {
     return;
   }
 
-  state.previewHistoryIndex += 1;
-  state.previewUrl = state.previewHistory[state.previewHistoryIndex] || "";
+  applyPreviewHistoryState(nextHistory);
   state.previewVisible = true;
   syncPreviewFrame();
   if (isMobileViewport() && state.mobileScreen === "chat") {
@@ -1526,13 +1506,12 @@ function goForwardPreview() {
 }
 
 function jumpPreviewHistory(index) {
-  const nextIndex = Number(index);
-  if (!Number.isInteger(nextIndex) || nextIndex < 0 || nextIndex >= state.previewHistory.length) {
+  const nextHistory = PREVIEW_HISTORY.jump(getPreviewHistoryState(), index);
+  if (!nextHistory) {
     return;
   }
 
-  state.previewHistoryIndex = nextIndex;
-  state.previewUrl = state.previewHistory[nextIndex] || "";
+  applyPreviewHistoryState(nextHistory);
   state.previewVisible = true;
   syncPreviewFrame();
   if (isMobileViewport() && state.mobileScreen === "chat") {
@@ -2014,14 +1993,16 @@ async function focusWindow() {
 }
 
 async function sendComposerShortcut() {
-  const text = elements.sendTextInput.value;
+  const action = COMPOSER_UTILS.getEnterAction(elements.sendTextInput.value);
 
-  if (text.length > 0) {
-    await sendText({ appendNewline: true });
+  if (action.type === "send-text") {
+    await sendText({ appendNewline: action.appendNewline });
     return;
   }
 
-  await sendKey("enter");
+  if (action.type === "send-key") {
+    await sendKey(action.key);
+  }
 }
 
 async function setScreenExtent(extent) {
@@ -2527,7 +2508,7 @@ function attachEvents() {
   });
 
   elements.sendTextInput.addEventListener("keydown", async (event) => {
-    if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+    if (!COMPOSER_UTILS.shouldSubmitOnKeydown(event)) {
       return;
     }
 

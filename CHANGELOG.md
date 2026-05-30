@@ -12,6 +12,7 @@
 - Moved the mobile Browser reopen tab to the right-side vertical center so it no longer overlaps the bottom composer.
 - Preserved mobile pane output while Browser is open and refresh the selected pane immediately when returning to KT Panel.
 - Reset Browser history when opening a URL from the KT Panel, so root Back returns to the KT Panel and unrelated pane/topic links do not share one Back stack.
+- Split Browser URL-stack and Input Console Enter-key decisions into frontend helper modules to prepare for richer composer actions.
 
 ## v0.1.0 - Initial Release
 

@@ -116,6 +116,8 @@ Edit the target in the Connect sidebar if your kitty binary or socket pattern di
 - `public/app.js`: stateful app orchestration, event wiring, session control, and API calls.
 - `public/modules/browser-utils.js`: URL normalization, Browser proxy URL creation, HTML escaping, and terminal URL linkification.
 - `public/modules/mobile-utils.js`: mobile viewport and browser-history helpers.
+- `public/modules/preview-history.js`: pure Browser URL stack operations for root, back, forward, and jump behavior.
+- `public/modules/composer-utils.js`: pure Input Console Enter-key submit decisions.
 
 ## Embedded Browser Proxy
 

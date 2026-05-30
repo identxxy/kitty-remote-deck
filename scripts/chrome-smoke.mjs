@@ -1057,6 +1057,12 @@ async function runViewport(client, width, height, label) {
         allModeHistoryPause: ${JSON.stringify(allModeHistoryPause)},
         urlActivityRemoved: ${JSON.stringify(urlActivityRemoved)},
         terminalLinks: ${JSON.stringify(terminalLinks)},
+        frontendModules: {
+          browser: typeof window.KRDBrowserUtils?.normalizeBrowserUrl === 'function',
+          mobile: typeof window.KRDMobileUtils?.syncHistory === 'function',
+          previewHistory: typeof window.KRDPreviewHistory?.remember === 'function',
+          composer: typeof window.KRDComposerUtils?.getEnterAction === 'function'
+        },
         mobileSwitcherWorked: ${JSON.stringify(mobileSwitcherWorked)},
         previewDrawerWorked: ${JSON.stringify(previewDrawerWorked)},
         wheelCanceled: ${JSON.stringify(wheelCanceled)},
@@ -1099,6 +1105,10 @@ async function runViewport(client, width, height, label) {
     metrics.terminalLinks.length !== 2 ||
     !metrics.terminalLinks.includes("https://example.com/report.html") ||
     !metrics.terminalLinks.includes("file:///tmp/krd-report.html") ||
+    metrics.frontendModules.browser !== true ||
+    metrics.frontendModules.mobile !== true ||
+    metrics.frontendModules.previewHistory !== true ||
+    metrics.frontendModules.composer !== true ||
     metrics.mobileSwitcherWorked.labels.length !== 2 ||
     !metrics.mobileSwitcherWorked.labels.includes("ID 1234") ||
     !metrics.mobileSwitcherWorked.labels.includes("ID 2345") ||
