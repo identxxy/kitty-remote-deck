@@ -279,6 +279,88 @@ def action_focus_window():
     return {"socket": socket, "windowId": window_id}
 
 
+def optional_positive_int(name):
+    value = PAYLOAD.get(name)
+    if value in (None, ""):
+        return None
+    number = int(value)
+    if number <= 0:
+        raise RuntimeError(f"{name} must be a positive integer.")
+    return number
+
+
+def run_launch(args, socket):
+    raw_window_id = run_kitty(args, socket=socket).strip()
+    try:
+        window_id = int(raw_window_id)
+    except ValueError as error:
+        raise RuntimeError(f"kitty launch returned an invalid window id: {raw_window_id or '<empty>'}") from error
+    run_kitty(["focus-window", "--match", f"id:{window_id}"], socket=socket)
+    return window_id
+
+
+def action_create_panel():
+    kind = (PAYLOAD.get("kind") or "window").strip().lower()
+    socket = resolve_socket(PAYLOAD.get("socket") or "")
+
+    if kind == "window":
+        window_id = run_launch(["launch", "--type", "os-window"], socket)
+        return {"socket": socket, "kind": kind, "windowId": window_id}
+
+    source_window_id = optional_positive_int("sourceWindowId")
+    if not source_window_id:
+        raise RuntimeError("sourceWindowId is required.")
+
+    source_match = f"id:{source_window_id}"
+    common_args = [
+        "--source-window",
+        source_match,
+        "--cwd",
+        "current",
+        "--next-to",
+        source_match,
+    ]
+
+    if kind == "tab":
+        window_id = run_launch(["launch", "--type", "tab", *common_args], socket)
+        return {
+            "socket": socket,
+            "kind": kind,
+            "sourceWindowId": source_window_id,
+            "windowId": window_id,
+        }
+
+    if kind == "split":
+        tab_id = optional_positive_int("tabId")
+        if not tab_id:
+            raise RuntimeError("tabId is required.")
+
+        tab_match = f"id:{tab_id}"
+        run_kitty(["goto-layout", "--match", tab_match, "splits"], socket=socket)
+        window_id = run_launch(
+            [
+                "launch",
+                "--type",
+                "window",
+                "--match",
+                tab_match,
+                "--location",
+                "split",
+                *common_args,
+            ],
+            socket,
+        )
+        return {
+            "socket": socket,
+            "kind": kind,
+            "tabId": tab_id,
+            "sourceWindowId": source_window_id,
+            "windowId": window_id,
+        }
+
+    raise RuntimeError("kind must be one of: window, tab, split.")
+
+
 ACTIONS = {
     "test": action_test,
     "fetch_url": action_fetch_url,
@@ -288,6 +370,7 @@ ACTIONS = {
     "send_text": action_send_text,
     "send_key": action_send_key,
     "focus_window": action_focus_window,
+    "create_panel": action_create_panel,
 }
 
 

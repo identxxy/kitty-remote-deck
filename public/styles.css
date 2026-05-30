@@ -437,6 +437,33 @@ button {
   min-width: 0;
 }
 
+.sidebar-head-actions,
+.session-head-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.session-head-actions {
+  flex-wrap: wrap;
+}
+
+.session-create-button {
+  min-height: 26px;
+  padding: 4px 7px;
+  color: var(--text);
+  font-size: 0.74rem;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.session-create-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .sidebar-head h2,
 .panel-head h2 {
   margin: 0;
@@ -1449,10 +1476,38 @@ textarea::-webkit-scrollbar-thumb:hover {
 }
 
 .os-window-block,
-.tab-block {
+.tab-block,
+.os-window-create-block {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: rgba(127, 127, 127, 0.04);
+}
+
+.os-window-create-block {
+  border-style: dashed;
+  background:
+    linear-gradient(180deg, rgba(127, 127, 127, 0.055), rgba(127, 127, 127, 0.025));
+}
+
+.create-window-card-button {
+  width: 100%;
+  min-height: 56px;
+  display: grid;
+  justify-items: start;
+  gap: 3px;
+  padding: 10px 12px;
+  text-align: left;
+  background: transparent;
+}
+
+.create-window-card-button span {
+  color: var(--text-strong);
+  font-weight: 650;
+}
+
+.create-window-card-button small {
+  color: var(--muted);
+  font-size: 0.74rem;
 }
 
 .os-window-head,

@@ -1,6 +1,6 @@
 const STORAGE_KEY = "kitty-remote-deck-ui";
 const DEBUG_STORAGE_KEY = "kitty-remote-deck-debug";
-const CLIENT_BUILD = "0.1.0-image-composer-11";
+const CLIENT_BUILD = "0.2.0";
 const MOBILE_HISTORY_KEY = "krdMobileScreen";
 const FONT_SIZE_RANGE = { min: 5, max: 18, default: 13 };
 const THEME_SET = new Set(["dark", "graphite", "light"]);
@@ -71,7 +71,8 @@ const state = {
   browserWidth: BROWSER_WIDTH_RANGE.default,
   bottomPanelHeight: 230,
   imageAttachment: null,
-  composerSending: false
+  composerSending: false,
+  sessionCreating: false
 };
 
 const elements = {
@@ -1360,6 +1361,90 @@ function getWindowProcessLabel(windowInfo) {
   return basename || "process";
 }
 
+function getFirstWindowInTab(tab) {
+  return (tab?.windows || [])[0] || null;
+}
+
+function getFirstWindowInOsWindow(osWindow) {
+  for (const tab of osWindow?.tabs || []) {
+    const windowInfo = getFirstWindowInTab(tab);
+    if (windowInfo) {
+      return windowInfo;
+    }
+  }
+  return null;
+}
+
+function getCreatePanelLabel(kind) {
+  if (kind === "tab") return "tab";
+  if (kind === "split") return "split";
+  return "window";
+}
+
+function syncSessionCreateControls() {
+  const buttons = Array.from(elements.sessionTree.querySelectorAll("[data-create-session]"));
+
+  buttons.forEach((button) => {
+    const lacksAnchor = button.dataset.createSession && !button.dataset.sourceWindowId;
+    const kind = button.dataset.createSession || "";
+    button.disabled = state.sessionCreating || lacksAnchor || !state.selectedTargetId;
+    if (kind === "window") {
+      button.disabled = state.sessionCreating || !state.selectedTargetId;
+    }
+  });
+}
+
+async function createKittyPanel(kind, context = {}) {
+  if (!state.selectedTargetId) {
+    setStatus("Choose a connection target first.", "warning");
+    return;
+  }
+
+  if (state.sessionCreating) {
+    setStatus("A Kitty create action is already running.", "neutral");
+    return;
+  }
+
+  const payload = {
+    targetId: state.selectedTargetId,
+    socket: state.selectedSocket || "",
+    kind
+  };
+
+  if (context.sourceWindowId) {
+    payload.sourceWindowId = Number(context.sourceWindowId);
+  }
+  if (context.tabId) {
+    payload.tabId = Number(context.tabId);
+  }
+
+  const label = getCreatePanelLabel(kind);
+  state.sessionCreating = true;
+  syncSessionCreateControls();
+  setStatus(`Creating new ${label}...`, "neutral");
+
+  try {
+    const result = await apiFetch("/api/create-panel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    if (result.socket) {
+      state.selectedSocket = result.socket;
+    }
+
+    await loadSessions({ forceRefresh: true, refreshPane: false });
+    if (result.windowId) {
+      await selectWindow(result.windowId);
+    }
+    setStatus(`Created new ${label} #${result.windowId || ""}.`, "success");
+  } finally {
+    state.sessionCreating = false;
+    syncSessionCreateControls();
+  }
+}
+
 async function selectWindow(windowId) {
   state.selectedWindowId = Number(windowId);
   if (isMobileViewport()) {
@@ -1416,24 +1501,64 @@ function renderMobilePaneSwitcher() {
   }
 }
 
+function bindSessionCreateControls() {
+  elements.sessionTree.querySelectorAll("[data-create-session]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      try {
+        await createKittyPanel(button.dataset.createSession, {
+          sourceWindowId: button.dataset.sourceWindowId,
+          tabId: button.dataset.tabId
+        });
+      } catch (error) {
+        setTargetHealth("Create failed", "danger");
+        setStatus(error.message, "danger");
+      }
+    });
+  });
+
+  syncSessionCreateControls();
+}
+
 function renderSessions() {
   const totalWindows = state.flatWindows.length;
   const selectedTarget = getSelectedTarget();
+  const newWindowFooter = `
+    <section class="os-window-create-block">
+      <button
+        class="ghost-button session-create-button create-window-card-button"
+        id="createWindowBtn"
+        type="button"
+        data-create-session="window"
+      >
+        <span>New Window</span>
+        <small>Create OS Window #${state.sessionTree.length + 1}</small>
+      </button>
+    </section>
+  `;
 
   elements.sessionSummary.textContent = selectedTarget
     ? `${selectedTarget.name} · ${state.sessionTree.length} OS windows / ${totalWindows} panes`
     : "Choose a target from the top selector, then connect.";
 
   if (!state.sessionTree.length) {
-    elements.sessionTree.innerHTML = `<div class="empty-note">No kitty session data yet. Click Connect to load sessions.</div>`;
+    elements.sessionTree.innerHTML = `
+      <div class="empty-note">No kitty session data yet. Click Connect to load sessions.</div>
+      ${newWindowFooter}
+    `;
     renderMobilePaneSwitcher();
+    bindSessionCreateControls();
     return;
   }
 
   const markup = state.sessionTree
     .map((osWindow) => {
+      const osWindowAnchor = getFirstWindowInOsWindow(osWindow);
+      const tabCreateDisabled = osWindowAnchor ? "" : "disabled";
       const tabs = (osWindow.tabs || [])
         .map((tab) => {
+          const tabAnchor = getFirstWindowInTab(tab);
+          const splitCreateDisabled = tabAnchor ? "" : "disabled";
           const windows = (tab.windows || [])
             .map((window) => {
               const activeClass = Number(window.id) === Number(state.selectedWindowId) ? "selected" : "";
@@ -1465,7 +1590,17 @@ function renderSessions() {
                   <h4>${escapeHtml(tab.title || `Tab ${tab.id}`)}</h4>
                   <small>${escapeHtml(tab.layout || "")}</small>
                 </div>
-                <span>tab #${tab.id}</span>
+                <div class="session-head-actions">
+                  <span>tab #${tab.id}</span>
+                  <button
+                    class="ghost-button session-create-button"
+                    type="button"
+                    data-create-session="split"
+                    data-tab-id="${escapeAttribute(tab.id)}"
+                    data-source-window-id="${escapeAttribute(tabAnchor?.id || "")}"
+                    ${splitCreateDisabled}
+                  >New Split</button>
+                </div>
               </div>
               <div class="pane-grid">${windows}</div>
             </article>
@@ -1480,7 +1615,17 @@ function renderSessions() {
               <h3>OS Window #${osWindow.id}</h3>
               <small>${osWindow.is_focused ? "focused now" : "background window"}</small>
             </div>
-            <span>${(osWindow.tabs || []).length} tabs</span>
+            <div class="session-head-actions">
+              <span>${(osWindow.tabs || []).length} tabs</span>
+              <button
+                class="ghost-button session-create-button"
+                type="button"
+                data-create-session="tab"
+                data-os-window-id="${escapeAttribute(osWindow.id)}"
+                data-source-window-id="${escapeAttribute(osWindowAnchor?.id || "")}"
+                ${tabCreateDisabled}
+              >New Tab</button>
+            </div>
           </div>
           ${tabs}
         </section>
@@ -1488,7 +1633,7 @@ function renderSessions() {
     })
     .join("");
 
-  elements.sessionTree.innerHTML = markup;
+  elements.sessionTree.innerHTML = `${markup}${newWindowFooter}`;
 
   elements.sessionTree.querySelectorAll("[data-window-id]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -1500,6 +1645,7 @@ function renderSessions() {
   });
 
   renderMobilePaneSwitcher();
+  bindSessionCreateControls();
 }
 
 function getSessionPaneFromEvent(event) {

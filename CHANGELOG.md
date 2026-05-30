@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.2.0 - Kitty Surface Management
+
 - Added a mobile chat-style flow: Connect screen, full-screen Session list, full-screen pane conversation, visible bottom composer, and Fit/Wide terminal text modes.
 - Allowed one device token to keep multiple active browser sessions, so mobile and desktop-mode tabs from the same device do not invalidate each other.
 - Improved device-token authentication feedback with an initial auth-check screen and authenticated key label/toast.
@@ -17,6 +19,7 @@
 - Improved image-attachment composer layout and added a sending state to prevent duplicate image submissions while upload is in flight.
 - Changed image upload storage to the user-visible target-side `~/Pictures/voxpress/YYYYMMDD/` directory, with `KRD_IMAGE_UPLOAD_DIR` support for overriding the root.
 - Moved the desktop image picker to the Input Console header, kept the mobile image action in the bottom action row, and standardized user-facing UI copy in English.
+- Added scoped Kitty creation controls for new OS windows, tabs, and tab-level splits.
 
 ## v0.1.0 - Initial Release
 

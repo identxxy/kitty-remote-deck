@@ -2,7 +2,7 @@
 
 A local web app for browsing and controlling GUI `kitty` sessions on the same machine or over SSH.
 
-Current release: `v0.1.0`.
+Current release: `v0.2.0`.
 
 ## What It Does
 
@@ -95,6 +95,7 @@ Edit the target in the Connect sidebar if your kitty binary or socket pattern di
 - `All` mode fetches `get-text --extent all`; mouse wheel scrolls the browser's local scrollback view.
 - When `All` mode is scrolled away from the bottom, automatic full-text refresh pauses to avoid jumping and repeated scrollback transfers. Use `Refresh All` to return to the live tail.
 - Terminal URLs are clickable; clicking one opens the right-side Browser as a new root page, so unrelated pane/topic links do not share one Browser Back stack.
+- Session Explorer can create Kitty surfaces through scoped controls: `New Window` creates a new top-level Kitty OS window, `New Tab` appears inside each OS window card, and `New Split` appears inside each tab card.
 - The Browser address bar accepts `https://`, `http://`, `file://`, bare hostnames such as `example.com`, hostnames with ports such as `localhost:8080`, and absolute target-side paths such as `/tmp/report.html`.
 - When the Browser is not pinned, clicking or focusing elsewhere in the workbench hides it. Pinning keeps it open as a real right-side column that compresses the editor and Input Console instead of overlaying them.
 - On mobile-width screens, the UI becomes a chat-style flow: Connect screen, full-screen Session list, then a full-screen pane conversation with a back button.
@@ -166,7 +167,7 @@ The project uses semantic versioning. The current release is recorded in:
 - `VERSION`
 - `CHANGELOG.md`
 
-Git release tags use the `vMAJOR.MINOR.PATCH` format, for example `v0.1.0`.
+Git release tags use the `vMAJOR.MINOR.PATCH` format, for example `v0.2.0`.
 
 ## Sync to a Remote Playground
 

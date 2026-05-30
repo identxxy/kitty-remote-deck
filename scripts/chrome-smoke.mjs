@@ -263,7 +263,67 @@ async function runMobileChatViewport(client, width, height, label) {
       ];
       state.flatWindows = flattenWindows(state.sessionTree);
       state.selectedWindowId = null;
+      state.targets = [{ id: 'local', name: 'Local Kitty' }];
+      state.selectedTargetId = 'local';
+      state.selectedSocket = '/tmp/kitty-smoke.sock';
       setMobileScreen('sessions');
+      renderSessions();
+
+      const createButtonScopes = {
+        globalText: document.querySelector('#createWindowBtn span')?.textContent.trim() || '',
+        globalInTree: Boolean(document.querySelector('#sessionTree > .os-window-create-block #createWindowBtn')),
+        globalIsLastTreeItem: document.querySelector('#sessionTree')?.lastElementChild?.classList.contains('os-window-create-block') || false,
+        tabButtons: Array.from(document.querySelectorAll('[data-create-session="tab"]')).map((button) => ({
+          sourceWindowId: button.dataset.sourceWindowId,
+          inOsWindow: Boolean(button.closest('.os-window-block'))
+        })),
+        splitButtons: Array.from(document.querySelectorAll('[data-create-session="split"]')).map((button) => ({
+          sourceWindowId: button.dataset.sourceWindowId,
+          tabId: button.dataset.tabId,
+          inTab: Boolean(button.closest('.tab-block'))
+        }))
+      };
+      const originalCreateApiFetch = apiFetch;
+      const createCalls = [];
+      apiFetch = async (url, options = {}) => {
+        const href = String(url);
+        if (href === '/api/create-panel') {
+          const body = JSON.parse(options.body || '{}');
+          createCalls.push(body);
+          return { socket: body.socket || '/tmp/kitty-smoke.sock', kind: body.kind, windowId: 9000 + createCalls.length };
+        }
+        if (href.startsWith('/api/sessions?')) {
+          return { tree: state.sessionTree, selectedSocket: state.selectedSocket || '', sockets: [state.selectedSocket || ''] };
+        }
+        if (href.startsWith('/api/screen?')) {
+          return { text: 'created pane ready' };
+        }
+        return originalCreateApiFetch(url, options);
+      };
+      const waitForCreate = async (count) => {
+        for (let index = 0; index < 30; index += 1) {
+          if (createCalls.length >= count && !state.sessionCreating) return;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        throw new Error('Timed out waiting for create panel action');
+      };
+      document.querySelector('#createWindowBtn').click();
+      await waitForCreate(1);
+      document.querySelector('[data-create-session="tab"]').click();
+      await waitForCreate(2);
+      document.querySelector('[data-create-session="split"]').click();
+      await waitForCreate(3);
+      const createActions = {
+        buttonScopes: createButtonScopes,
+        calls: createCalls.slice(),
+        selectedWindowId: state.selectedWindowId,
+        screenText: document.querySelector('#screenOutput').textContent,
+        status: document.querySelector('#statusMessage').textContent
+      };
+      apiFetch = originalCreateApiFetch;
+      state.selectedTargetId = '';
+      state.selectedSocket = '';
+      setMobileScreen('sessions', { history: 'replace' });
       renderSessions();
 
       const sessions = {
@@ -556,6 +616,7 @@ async function runMobileChatViewport(client, width, height, label) {
         viewportWidth: window.innerWidth,
         initial,
         sessions,
+        createActions,
         chatBeforeWide,
         mobileBrowserPreview,
         mobileBrowserAfterDeferredSessionRefresh,
@@ -707,6 +768,26 @@ async function runMobileChatViewport(client, width, height, label) {
     mobileFlow.sessions.editorDisplay !== "none" ||
     mobileFlow.sessions.paneItems !== 2 ||
     mobileFlow.sessions.backToConnectDisplay === "none" ||
+    mobileFlow.createActions.buttonScopes.globalText !== "New Window" ||
+    mobileFlow.createActions.buttonScopes.globalInTree !== true ||
+    mobileFlow.createActions.buttonScopes.globalIsLastTreeItem !== true ||
+    mobileFlow.createActions.buttonScopes.tabButtons.length !== 1 ||
+    mobileFlow.createActions.buttonScopes.tabButtons[0].sourceWindowId !== "1234" ||
+    mobileFlow.createActions.buttonScopes.tabButtons[0].inOsWindow !== true ||
+    mobileFlow.createActions.buttonScopes.splitButtons.length !== 1 ||
+    mobileFlow.createActions.buttonScopes.splitButtons[0].sourceWindowId !== "1234" ||
+    mobileFlow.createActions.buttonScopes.splitButtons[0].tabId !== "11" ||
+    mobileFlow.createActions.buttonScopes.splitButtons[0].inTab !== true ||
+    mobileFlow.createActions.calls.length !== 3 ||
+    mobileFlow.createActions.calls[0].kind !== "window" ||
+    Object.prototype.hasOwnProperty.call(mobileFlow.createActions.calls[0], "sourceWindowId") ||
+    mobileFlow.createActions.calls[1].kind !== "tab" ||
+    mobileFlow.createActions.calls[1].sourceWindowId !== 1234 ||
+    mobileFlow.createActions.calls[2].kind !== "split" ||
+    mobileFlow.createActions.calls[2].sourceWindowId !== 1234 ||
+    mobileFlow.createActions.calls[2].tabId !== 11 ||
+    mobileFlow.createActions.selectedWindowId !== 9003 ||
+    !mobileFlow.createActions.screenText.includes("created pane ready") ||
     mobileFlow.chatBeforeWide.mobileScreen !== "chat" ||
     mobileFlow.chatBeforeWide.chatClass !== true ||
     mobileFlow.chatBeforeWide.sidebarDisplay !== "none" ||

@@ -222,12 +222,31 @@ async function parseRequestBody(request, options = {}) {
   }
 }
 
-function parseWindowId(value) {
-  const windowId = Number(value);
-  if (!Number.isInteger(windowId) || windowId <= 0) {
-    throw new Error("windowId must be a positive integer.");
+function parsePositiveInteger(value, name) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) {
+    throw new Error(`${name} must be a positive integer.`);
   }
-  return windowId;
+  return number;
+}
+
+function parseOptionalPositiveInteger(value, name) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  return parsePositiveInteger(value, name);
+}
+
+function parseWindowId(value) {
+  return parsePositiveInteger(value, "windowId");
+}
+
+function parseCreatePanelKind(value) {
+  const kind = String(value || "window").trim().toLowerCase();
+  if (!["window", "tab", "split"].includes(kind)) {
+    throw new Error("kind must be one of: window, tab, split.");
+  }
+  return kind;
 }
 
 function parseScrollLines(value) {
@@ -658,6 +677,26 @@ async function handleApi(request, response, requestUrl) {
         {
           socket: body.socket || "",
           windowId
+        },
+        25000
+      );
+      sendJson(response, 200, data);
+      return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/api/create-panel") {
+      const body = await parseRequestBody(request);
+      const target = await resolveTargetFromRequest(body);
+      const kind = parseCreatePanelKind(body.kind);
+
+      const data = await runRemoteKittyAction(
+        target,
+        "create_panel",
+        {
+          socket: body.socket || "",
+          kind,
+          sourceWindowId: parseOptionalPositiveInteger(body.sourceWindowId, "sourceWindowId"),
+          tabId: parseOptionalPositiveInteger(body.tabId, "tabId")
         },
         25000
       );
