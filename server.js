@@ -532,6 +532,9 @@ async function handleApi(request, response, requestUrl) {
       );
       const transformed = transformFetchedResource(data, target.id);
       sendBuffer(response, 200, transformed.buffer, transformed.contentType, {
+        "Access-Control-Allow-Origin": "*",
+        "Cross-Origin-Resource-Policy": "cross-origin",
+        "Timing-Allow-Origin": "*",
         "X-KRD-Final-URL": encodeURIComponent(data.finalUrl || data.url || url),
         "X-KRD-Truncated": data.truncated ? "1" : "0"
       });

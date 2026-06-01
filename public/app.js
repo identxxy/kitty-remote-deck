@@ -15,6 +15,7 @@ const SESSION_TREE_REFRESH_EVERY_TICKS = 3;
 const ALL_TEXT_AUTO_REFRESH_EVERY_TICKS = 3;
 const WHEEL_SCROLL_DEBOUNCE_MS = 70;
 const WHEEL_SCROLL_MAX_LINES = 80;
+const LOCAL_SCROLL_BOUNDARY_EPSILON = 2;
 const MOBILE_AUTO_CONNECT_DELAY_MS = 1000;
 const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 const SUPPORTED_IMAGE_TYPES = new Set([
@@ -981,6 +982,30 @@ function setScreenOutputScrollTop(scrollTop) {
   output.scrollTop = clamp(scrollTop, 0, maxScrollTop);
 }
 
+function getScreenOutputScrollBoundary() {
+  const output = elements.screenOutput;
+  const maxScrollTop = Math.max(0, output.scrollHeight - output.clientHeight);
+  return {
+    maxScrollTop,
+    atTop: output.scrollTop <= LOCAL_SCROLL_BOUNDARY_EPSILON,
+    atBottom: output.scrollTop >= maxScrollTop - LOCAL_SCROLL_BOUNDARY_EPSILON
+  };
+}
+
+function shouldForwardWheelToKitty(event) {
+  const deltaY = event.deltaY || 0;
+  if (!deltaY) {
+    return false;
+  }
+
+  const boundary = getScreenOutputScrollBoundary();
+  if (boundary.maxScrollTop <= LOCAL_SCROLL_BOUNDARY_EPSILON) {
+    return true;
+  }
+
+  return deltaY < 0 ? boundary.atTop : boundary.atBottom;
+}
+
 function renderScreenText(text, options = {}) {
   const output = elements.screenOutput;
   const previousTop = output.scrollTop;
@@ -1459,8 +1484,7 @@ async function selectWindow(windowId) {
   applyUiState();
   await refreshScreen({
     force: true,
-    scrollToBottom: state.screenExtent === "all" && state.allTextFollowTail,
-    scrollToTop: state.screenExtent === "screen"
+    scrollToBottom: state.screenExtent === "screen" || (state.screenExtent === "all" && state.allTextFollowTail)
   });
 }
 
@@ -2042,7 +2066,7 @@ async function loadSessions(options = {}) {
     if (options.refreshPane !== false) {
       await refreshScreen({
         force: Boolean(options.forceRefresh),
-        scrollToBottom: Boolean(options.scrollToBottom)
+        scrollToBottom: Boolean(options.scrollToBottom || (selectedWindowChanged && state.screenExtent === "screen"))
       });
     } else if (selectedWindowChanged) {
       state.screenText = "";
@@ -2118,6 +2142,10 @@ function wheelDeltaToLines(event) {
 
 function queueRemoteScrollFromWheel(event) {
   if (state.screenExtent !== "screen") {
+    return;
+  }
+
+  if (!shouldForwardWheelToKitty(event)) {
     return;
   }
 
@@ -2376,11 +2404,11 @@ async function setScreenExtent(extent) {
   }
 
   applyUiState();
-  await refreshScreen({ force: true, scrollToBottom: nextExtent === "all", scrollToTop: nextExtent === "screen" });
+  await refreshScreen({ force: true, scrollToBottom: true });
   setStatus(
     nextExtent === "all"
       ? "Switched to All: showing screen + scrollback; wheel scrolls in the browser."
-      : "Switched to Screen: wheel controls the kitty viewport.",
+      : "Switched to Screen: wheel scrolls locally until the top or bottom edge.",
     "neutral"
   );
 }

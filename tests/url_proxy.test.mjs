@@ -5,6 +5,7 @@ import proxy from "../server/url_proxy.js";
 
 const {
   createProxyUrl,
+  ensureAnonymousCrossoriginForProxyResources,
   rewriteCssResources,
   rewriteHtmlResources
 } = proxy;
@@ -56,4 +57,30 @@ test("HTML bridge script reports browser loads and intercepts in-frame navigatio
   assert.match(rewritten, /post\("browser:loaded", finalUrl\)/);
   assert.match(rewritten, /event\.preventDefault\(\)/);
   assert.match(rewritten, /https:\/\/example\.com\/report\/index\.html/);
+});
+
+test("proxied browser render resources opt into anonymous CORS", () => {
+  const html = `
+    <script type="module" src="./app.js"></script>
+    <img src="textures/diffuse.png">
+    <video src="movies/demo.mp4"></video>
+    <link rel="stylesheet" href="style.css">
+    <a href="next.html">next</a>
+  `;
+
+  const rewritten = rewriteHtmlResources(html, "https://example.com/scene/index.html", "target-a");
+
+  assert.match(rewritten, /<script[^>]+crossorigin="anonymous"[^>]*>/);
+  assert.match(rewritten, /<img[^>]+crossorigin="anonymous"[^>]*>/);
+  assert.match(rewritten, /<video[^>]+crossorigin="anonymous"[^>]*>/);
+  assert.match(rewritten, /<link[^>]+crossorigin="anonymous"[^>]*>/);
+  assert.doesNotMatch(rewritten, /<a[^>]+crossorigin=/);
+});
+
+test("existing crossorigin attributes are preserved", () => {
+  const html = '<script src="/api/url-resource?targetId=a&url=https%3A%2F%2Fexample.com%2Fa.js" crossorigin="use-credentials"></script>';
+  const rewritten = ensureAnonymousCrossoriginForProxyResources(html);
+
+  assert.equal((rewritten.match(/crossorigin=/g) || []).length, 1);
+  assert.match(rewritten, /crossorigin="use-credentials"/);
 });

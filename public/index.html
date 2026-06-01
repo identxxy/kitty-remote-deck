@@ -284,7 +284,14 @@
             <button class="secondary-button browser-go-button" id="browserGoBtn" type="submit">Go</button>
           </form>
           <div class="preview-address" id="previewAddress">Click a terminal URL or enter a URL in the address bar.</div>
-          <iframe class="preview-frame" id="urlPreviewFrame" title="Embedded browser" sandbox="allow-forms allow-modals allow-popups allow-scripts"></iframe>
+          <iframe
+            class="preview-frame"
+            id="urlPreviewFrame"
+            title="Embedded browser"
+            sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-presentation allow-scripts"
+            allow="autoplay; fullscreen; xr-spatial-tracking"
+            allowfullscreen
+          ></iframe>
         </aside>
         <button class="preview-reopen-button" id="reopenPreviewBtn" type="button" hidden aria-label="Reopen Browser">Browser</button>
       </div>

@@ -1157,11 +1157,113 @@ async function runViewport(client, width, height, label) {
   if (screenModePreservedScroll.before > 0 && screenModePreservedScroll.after < screenModePreservedScroll.before - 4) {
     throw new Error(`Screen mode local scroll was reset during refresh for ${label}: ${JSON.stringify(screenModePreservedScroll)}`);
   }
-  const wheelCanceled = await evaluate(
+  const screenModeWheelEdges = await evaluate(
+    client,
+    `(async () => {
+      const originalApiFetch = apiFetch;
+      const originalTargets = state.targets;
+      const originalTargetId = state.selectedTargetId;
+      const originalSocket = state.selectedSocket;
+      const originalSessionTree = state.sessionTree;
+      const originalFlatWindows = state.flatWindows;
+      const originalWindowId = state.selectedWindowId;
+      const originalScreenExtent = state.screenExtent;
+      const originalScreenText = state.screenText;
+      const longText = Array.from({ length: 260 }, (_, index) => 'screen edge line ' + index).join('\\n');
+      const scrollWindowCalls = [];
+
+      apiFetch = async (url, options = {}) => {
+        const href = String(url);
+        if (href.startsWith('/api/screen?')) {
+          return { text: longText };
+        }
+        if (href === '/api/scroll-window') {
+          scrollWindowCalls.push(JSON.parse(options.body || '{}'));
+          return { text: longText + '\\nremote scroll ' + scrollWindowCalls.length };
+        }
+        return originalApiFetch(url, options);
+      };
+
+      state.targets = [{ id: 'local', name: 'Local Kitty' }];
+      state.selectedTargetId = 'local';
+      state.selectedSocket = '/tmp/kitty-smoke.sock';
+      state.screenExtent = 'screen';
+      state.sessionTree = [
+        {
+          id: 1,
+          tabs: [
+            {
+              id: 11,
+              title: 'Scroll',
+              windows: [{ id: 4321, title: 'Scroll Pane', cwd: '/workspace', foreground_processes: [] }]
+            }
+          ]
+        }
+      ];
+      state.flatWindows = flattenWindows(state.sessionTree);
+      state.selectedWindowId = null;
+
+      await selectWindow(4321);
+      const output = document.querySelector('#screenOutput');
+      const maxScrollTop = Math.max(0, output.scrollHeight - output.clientHeight);
+      const selectedAtBottom = maxScrollTop > 0 && output.scrollTop >= maxScrollTop - 2;
+
+      output.scrollTop = Math.round(maxScrollTop / 2);
+      const midScrollCanceled = !output.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
+
+      output.scrollTop = maxScrollTop;
+      const bottomScrollCanceled = !output.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
+      await new Promise((resolve) => setTimeout(resolve, WHEEL_SCROLL_DEBOUNCE_MS + 80));
+
+      output.scrollTop = 0;
+      const topScrollCanceled = !output.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true }));
+      await new Promise((resolve) => setTimeout(resolve, WHEEL_SCROLL_DEBOUNCE_MS + 80));
+
+      state.selectedWindowId = null;
+      output.scrollTop = 0;
+      const noPaneBoundaryCanceled = !output.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true }));
+      const noPaneStatus = document.querySelector('#statusMessage').textContent;
+      if (scrollFlushTimer) {
+        clearTimeout(scrollFlushTimer);
+        scrollFlushTimer = null;
+      }
+      pendingScrollLines = 0;
+
+      apiFetch = originalApiFetch;
+      state.targets = originalTargets;
+      state.selectedTargetId = originalTargetId;
+      state.selectedSocket = originalSocket;
+      state.sessionTree = originalSessionTree;
+      state.flatWindows = originalFlatWindows;
+      state.selectedWindowId = originalWindowId;
+      state.screenExtent = originalScreenExtent;
+      state.screenText = originalScreenText;
+      renderSessions();
+      renderMobilePaneSwitcher();
+      renderViewerMeta();
+
+      return {
+        maxScrollTop,
+        selectedAtBottom,
+        midScrollCanceled,
+        bottomScrollCanceled,
+        topScrollCanceled,
+        noPaneBoundaryCanceled,
+        noPaneStatus,
+        scrollWindowCalls
+      };
+    })()`
+  );
+  await evaluate(
     client,
     `(() => {
+      state.selectedTargetId = state.selectedTargetId || 'local';
+      state.selectedWindowId = null;
+      state.screenExtent = 'screen';
+      document.querySelector('#screenOutput').scrollTop = 0;
       const event = new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true });
-      return !document.querySelector('#screenOutput').dispatchEvent(event);
+      document.querySelector('#screenOutput').dispatchEvent(event);
+      return true;
     })()`
   );
   await waitForExpression(client, "document.querySelector('#statusMessage')?.textContent.includes('Select a pane first')");
@@ -1219,7 +1321,7 @@ async function runViewport(client, width, height, label) {
         },
         mobileSwitcherWorked: ${JSON.stringify(mobileSwitcherWorked)},
         previewDrawerWorked: ${JSON.stringify(previewDrawerWorked)},
-        wheelCanceled: ${JSON.stringify(wheelCanceled)},
+        screenModeWheelEdges: ${JSON.stringify(screenModeWheelEdges)},
         escClickStatus: document.querySelector('#statusMessage').textContent,
         ctrlDText: document.querySelector('#sendCtrlDBtn').textContent,
         panelImageButton: {
@@ -1309,7 +1411,16 @@ async function runViewport(client, width, height, label) {
     metrics.previewDrawerWorked.reopenVisible !== true ||
     metrics.previewDrawerWorked.reopened !== true ||
     metrics.previewDrawerWorked.reopenedFrameSrc !== metrics.previewDrawerWorked.frameNavigateSrc ||
-    metrics.wheelCanceled !== true ||
+    metrics.screenModeWheelEdges.maxScrollTop <= 0 ||
+    metrics.screenModeWheelEdges.selectedAtBottom !== true ||
+    metrics.screenModeWheelEdges.midScrollCanceled !== false ||
+    metrics.screenModeWheelEdges.bottomScrollCanceled !== true ||
+    metrics.screenModeWheelEdges.topScrollCanceled !== true ||
+    metrics.screenModeWheelEdges.noPaneBoundaryCanceled !== true ||
+    !metrics.screenModeWheelEdges.noPaneStatus.includes("Select a pane first") ||
+    metrics.screenModeWheelEdges.scrollWindowCalls.length < 2 ||
+    metrics.screenModeWheelEdges.scrollWindowCalls[0].lines <= 0 ||
+    metrics.screenModeWheelEdges.scrollWindowCalls[1].lines >= 0 ||
     !metrics.escClickStatus.includes("Select a pane first") ||
     !metrics.ctrlDText.includes("Ctrl+D") ||
     metrics.panelImageButton.headerLabel !== "Attach image" ||

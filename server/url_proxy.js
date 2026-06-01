@@ -181,6 +181,21 @@ function rewriteStyleAttribute(value, baseUrl, targetId) {
   return rewriteCssResources(value, baseUrl, targetId);
 }
 
+function ensureAnonymousCrossoriginForProxyResources(html) {
+  return String(html).replace(
+    /<(script|img|video|audio|link)\b([^>]*\b(?:src|href)\s*=\s*(["'])\/api\/url-resource\?[^>]*?)>/gi,
+    (match, tagName, attributes) => {
+      if (/\scrossorigin\s*=/i.test(attributes)) {
+        return match;
+      }
+
+      const slash = /\/\s*$/.test(attributes) ? " /" : "";
+      const cleanAttributes = slash ? attributes.replace(/\/\s*$/, "").trimEnd() : attributes;
+      return `<${tagName}${cleanAttributes} crossorigin="anonymous"${slash}>`;
+    }
+  );
+}
+
 function rewriteHtmlResources(html, baseUrl, targetId, options = {}) {
   const rewrittenAttrs = String(html).replace(
     /\s([a-zA-Z:-]+)\s*=\s*(["'])(.*?)\2/gs,
@@ -203,7 +218,8 @@ function rewriteHtmlResources(html, baseUrl, targetId, options = {}) {
     }
   );
 
-  const withoutRefresh = rewrittenAttrs.replace(/<meta\b[^>]*http-equiv\s*=\s*(["'])refresh\1[^>]*>/gi, "");
+  const withCorsHints = ensureAnonymousCrossoriginForProxyResources(rewrittenAttrs);
+  const withoutRefresh = withCorsHints.replace(/<meta\b[^>]*http-equiv\s*=\s*(["'])refresh\1[^>]*>/gi, "");
   if (options.injectBrowserBridge === false) {
     return withoutRefresh;
   }
@@ -237,6 +253,7 @@ function isTextLikeContentType(contentType) {
 module.exports = {
   createProxyUrl,
   createBrowserBridgeScript,
+  ensureAnonymousCrossoriginForProxyResources,
   isCssContentType,
   isHtmlContentType,
   isTextLikeContentType,
