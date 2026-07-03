@@ -30,6 +30,7 @@ const BROWSER_UTILS = window.KRDBrowserUtils;
 const MOBILE_UTILS = window.KRDMobileUtils;
 const PREVIEW_HISTORY = window.KRDPreviewHistory;
 const COMPOSER_UTILS = window.KRDComposerUtils;
+const ANSI_UTILS = window.KRDAnsiUtils;
 
 const DEFAULT_TARGET_FORM = {
   name: "Local Kitty",
@@ -1014,7 +1015,7 @@ function renderScreenText(text, options = {}) {
 
   if (state.screenText !== nextText) {
     state.screenText = nextText;
-    output.innerHTML = linkifyTerminalText(state.screenText || "(current screen is empty)");
+    output.innerHTML = renderTerminalText(state.screenText || "(current screen is empty)");
   }
 
   if (state.screenExtent === "all") {
@@ -2492,6 +2493,14 @@ function trimUrlPunctuation(url) {
 
 function linkifyTerminalText(text) {
   return BROWSER_UTILS.linkifyTerminalText(text);
+}
+
+function renderTerminalText(text) {
+  if (ANSI_UTILS && typeof ANSI_UTILS.renderAnsiTerminalText === "function") {
+    return ANSI_UTILS.renderAnsiTerminalText(text);
+  }
+
+  return linkifyTerminalText(text);
 }
 
 function attachWheelContainment() {

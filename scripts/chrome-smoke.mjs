@@ -1033,6 +1033,42 @@ async function runViewport(client, width, height, label) {
       return Array.from(document.querySelectorAll('#screenOutput [data-preview-url]')).map((link) => link.dataset.previewUrl);
     })()`
   );
+  const ansiRenderWorked = await evaluate(
+    client,
+    `(() => {
+      window.renderScreenText('plain \\x1b[31mred\\x1b[0m \\x1b[38;2;1;2;3mhttps://example.com/color.html\\x1b[0m');
+      const spans = Array.from(document.querySelectorAll('#screenOutput span'));
+      const redSpan = spans.find((item) => item.textContent === 'red');
+      const trueColorLink = document.querySelector('#screenOutput [data-preview-url="https://example.com/color.html"]');
+      return {
+        redColor: redSpan ? getComputedStyle(redSpan).color : '',
+        linkUrl: trueColorLink?.dataset.previewUrl || '',
+        linkColor: trueColorLink ? getComputedStyle(trueColorLink).color : '',
+        moduleLoaded: typeof window.KRDAnsiUtils?.renderAnsiTerminalText === 'function'
+      };
+    })()`
+  );
+  const osc8RenderWorked = await evaluate(
+    client,
+    `(() => {
+      window.renderScreenText('doc \\x1b]8;;file:///home/vox/AGENTS.md\\x1b\\\\AGENTS.md\\x1b]8;;\\x1b\\\\ done');
+      const output = document.querySelector('#screenOutput');
+      const link = output.querySelector('[data-preview-url="file:///home/vox/AGENTS.md"]');
+      return {
+        text: output.textContent,
+        linkText: link?.textContent || '',
+        linkUrl: link?.dataset.previewUrl || '',
+        rawVisible: output.textContent.includes(']8;;')
+      };
+    })()`
+  );
+  await evaluate(
+    client,
+    `(() => {
+      window.renderScreenText('open https://example.com/report.html and file:///tmp/krd-report.html.');
+      return true;
+    })()`
+  );
   const mobileSwitcherWorked = await evaluate(
     client,
     `(async () => {
@@ -1317,8 +1353,11 @@ async function runViewport(client, width, height, label) {
           browser: typeof window.KRDBrowserUtils?.normalizeBrowserUrl === 'function',
           mobile: typeof window.KRDMobileUtils?.syncHistory === 'function',
           previewHistory: typeof window.KRDPreviewHistory?.remember === 'function',
-          composer: typeof window.KRDComposerUtils?.getEnterAction === 'function'
+          composer: typeof window.KRDComposerUtils?.getEnterAction === 'function',
+          ansi: typeof window.KRDAnsiUtils?.renderAnsiTerminalText === 'function'
         },
+        ansiRenderWorked: ${JSON.stringify(ansiRenderWorked)},
+        osc8RenderWorked: ${JSON.stringify(osc8RenderWorked)},
         mobileSwitcherWorked: ${JSON.stringify(mobileSwitcherWorked)},
         previewDrawerWorked: ${JSON.stringify(previewDrawerWorked)},
         screenModeWheelEdges: ${JSON.stringify(screenModeWheelEdges)},
@@ -1373,6 +1412,14 @@ async function runViewport(client, width, height, label) {
     metrics.frontendModules.mobile !== true ||
     metrics.frontendModules.previewHistory !== true ||
     metrics.frontendModules.composer !== true ||
+    metrics.frontendModules.ansi !== true ||
+    metrics.ansiRenderWorked.moduleLoaded !== true ||
+    metrics.ansiRenderWorked.redColor !== "rgb(205, 49, 49)" ||
+    metrics.ansiRenderWorked.linkUrl !== "https://example.com/color.html" ||
+    metrics.ansiRenderWorked.linkColor !== "rgb(1, 2, 3)" ||
+    metrics.osc8RenderWorked.rawVisible !== false ||
+    metrics.osc8RenderWorked.linkText !== "AGENTS.md" ||
+    metrics.osc8RenderWorked.linkUrl !== "file:///home/vox/AGENTS.md" ||
     metrics.mobileSwitcherWorked.labels.length !== 2 ||
     !metrics.mobileSwitcherWorked.labels.includes("ID 1234") ||
     !metrics.mobileSwitcherWorked.labels.includes("ID 2345") ||

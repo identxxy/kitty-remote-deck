@@ -218,17 +218,27 @@ def action_list_sessions():
 def action_get_screen():
     window_id = int(PAYLOAD["windowId"])
     socket = resolve_socket(PAYLOAD.get("socket") or "")
-    text = run_kitty(
-        [
-            "get-text",
-            "--match",
-            f"id:{window_id}",
-            "--extent",
-            PAYLOAD.get("extent") or "screen",
-        ],
-        socket=socket,
-    )
-    return {"socket": socket, "windowId": window_id, "text": text}
+    text, text_format = get_window_text(window_id, socket, PAYLOAD.get("extent") or "screen")
+    return {"socket": socket, "windowId": window_id, "text": text, "format": text_format}
+
+
+def get_window_text(window_id, socket, extent):
+    args = [
+        "get-text",
+        "--match",
+        f"id:{window_id}",
+        "--extent",
+        extent,
+        "--ansi",
+    ]
+
+    try:
+        return run_kitty(args, socket=socket), "ansi"
+    except RuntimeError as error:
+        if "--ansi" not in str(error) and "ansi" not in str(error).lower():
+            raise
+
+    return run_kitty(args[:-1], socket=socket), "plain"
 
 
 def action_scroll_window():
@@ -241,17 +251,8 @@ def action_scroll_window():
         suffix = "-" if lines < 0 else ""
         run_kitty(["scroll-window", "--match", f"id:{window_id}", f"{amount}{suffix}"], socket=socket)
 
-    text = run_kitty(
-        [
-            "get-text",
-            "--match",
-            f"id:{window_id}",
-            "--extent",
-            "screen",
-        ],
-        socket=socket,
-    )
-    return {"socket": socket, "windowId": window_id, "lines": lines, "text": text}
+    text, text_format = get_window_text(window_id, socket, "screen")
+    return {"socket": socket, "windowId": window_id, "lines": lines, "text": text, "format": text_format}
 
 
 def action_send_text():

@@ -11,9 +11,9 @@ Current release: `v0.2.0`.
 - Keeps SSH targets for controlling kitty sessions on another host.
 - Discovers kitty sockets such as `/tmp/kitty.sock-*`.
 - Lists OS windows, tabs, and panes from `kitty @ ls`.
-- Shows either the current screen text or the full screen + scrollback text for a selected pane.
-- In Screen mode, scrolls the selected pane through kitty remote control and refreshes the visible screen text.
-- Turns `http://`, `https://`, and `file://` URLs in terminal output into preview links.
+- Shows either the current screen text or the full screen + scrollback text for a selected pane, preserving ANSI foreground/background colors where kitty supports `get-text --ansi`.
+- In Screen mode, scrolls locally first, then scrolls the selected kitty pane through remote control when the local text view is already at the top or bottom edge.
+- Turns `http://`, `https://`, `file://`, and terminal OSC 8 hyperlinks in output into preview links.
 - Opens an embedded right-side Browser with back/forward navigation, history, an address bar, optional pinning, and proxied HTML, CSS, images, fonts, and relative links through the selected Local or SSH target.
 - Sends text, `Enter`, `Esc`, `Ctrl+C`, and `Ctrl+D` to the selected pane.
 - Persists UI preferences such as sidebar state and font size in the browser.
@@ -91,7 +91,7 @@ Edit the target in the Connect sidebar if your kitty binary or socket pattern di
 - The Image button, paste, or drag/drop can attach one image to the composer. Sending saves it on the active target and sends a Markdown image reference such as `![name](file:///target/path)` to the selected pane.
 - Images are stored on the active target host, not in the browser. The default path is `~/Pictures/voxpress/YYYYMMDD/YYYYMMDDHHMMSS-random-name.ext`; Local targets use the server machine, and SSH targets use the remote SSH user's home directory. Set `KRD_IMAGE_UPLOAD_DIR=/path/to/dir` before starting the server to override the root directory for target-side uploads.
 - Image uploads are not cleaned automatically. Treat `~/Pictures/voxpress/` as a user-visible inbox for files sent into KT sessions.
-- `Screen` mode shows the current kitty viewport; mouse wheel sends `kitty @ scroll-window` to the selected pane and then refreshes the screen text.
+- `Screen` mode shows the current kitty viewport with ANSI colors. Mouse wheel scrolls the browser's local text view first; only extra scrolling at the top or bottom edge sends `kitty @ scroll-window` to the selected pane and refreshes the screen text.
 - `All` mode fetches `get-text --extent all`; mouse wheel scrolls the browser's local scrollback view.
 - When `All` mode is scrolled away from the bottom, automatic full-text refresh pauses to avoid jumping and repeated scrollback transfers. Use `Refresh All` to return to the live tail.
 - Terminal URLs are clickable; clicking one opens the right-side Browser as a new root page, so unrelated pane/topic links do not share one Browser Back stack.
