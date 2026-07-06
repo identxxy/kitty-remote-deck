@@ -15,7 +15,7 @@ Current release: `v0.2.0`.
 - In Screen mode, scrolls locally first, then scrolls the selected kitty pane through remote control when the local text view is already at the top or bottom edge.
 - Turns `http://`, `https://`, `file://`, and terminal OSC 8 hyperlinks in output into preview links.
 - Opens an embedded right-side Browser with back/forward navigation, history, an address bar, optional pinning, and proxied HTML, CSS, images, fonts, and relative links through the selected Local or SSH target.
-- Sends text, `Enter`, `Esc`, `Ctrl+C`, and `Ctrl+D` to the selected pane.
+- Sends text, `Enter`, and special keys such as `Esc`, `Tab`, `Ctrl+C`, `Ctrl+D`, line-editing shortcuts, and arrow keys to the selected pane.
 - Persists UI preferences such as sidebar state and font size in the browser.
 
 ## Requirements
@@ -101,9 +101,7 @@ Edit the target in the Connect sidebar if your kitty binary or socket pattern di
 - On mobile-width screens, the UI becomes a chat-style flow: Connect screen, full-screen Session list, then a full-screen pane conversation with a back button.
 - Mobile pane conversations keep the input composer visible at the bottom. Fit mode wraps terminal text to the phone width; Wide mode preserves terminal columns and allows horizontal scrolling.
 - On mobile, terminal URL clicks open the Browser as a full-screen overlay. Use `‹ KT Panel` or the system Back action to return to the pane, or the floating Browser tab to reopen the last preview.
-- `Esc` sends `escape` to the selected pane, useful for interrupting full-screen or agent UIs.
-- `Ctrl+C` sends `ctrl+c` to the selected pane.
-- `Ctrl+D` sends `ctrl+d` to the selected pane.
+- The `Keys` menu sends lower-frequency terminal keys, including `Esc`, `Tab`, `Ctrl+A/E/K/L/U/W`, `Ctrl+C`, `Ctrl+D`, arrows, `Home`, and `End`.
 
 ## Workbench Layout
 
@@ -121,7 +119,7 @@ Edit the target in the Connect sidebar if your kitty binary or socket pattern di
 - `public/modules/browser-utils.js`: URL normalization, Browser proxy URL creation, HTML escaping, and terminal URL linkification.
 - `public/modules/mobile-utils.js`: mobile viewport and browser-history helpers.
 - `public/modules/preview-history.js`: pure Browser URL stack operations for root, back, forward, and jump behavior.
-- `public/modules/composer-utils.js`: pure Input Console Enter-key submit decisions.
+- `public/modules/composer-utils.js`: pure Input Console Enter-key submit decisions and special-key menu definitions.
 - `server/image_upload.js`: target-side image upload helpers and Markdown image-reference formatting.
 
 ## Embedded Browser Proxy

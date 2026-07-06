@@ -557,6 +557,15 @@ async function runMobileChatViewport(client, width, height, label) {
         valueAfter: composer.value
       };
 
+      document.querySelector('#specialKeyMenuBtn').click();
+      document.querySelector('[data-special-key-id="tab"]').click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const specialKeyComposer = {
+        calls: composerCalls.slice(multilineComposer.calls.length + newlineOnlyComposer.calls.length + emptyComposer.calls.length),
+        menuHiddenAfterClick: document.querySelector('#specialKeyMenuPopover').hidden,
+        menuLabels: Array.from(document.querySelectorAll('#specialKeyMenuPopover [data-special-key-id]')).map((button) => button.textContent.trim())
+      };
+
       state.imageAttachment = {
         name: 'smoke.png',
         type: 'image/png',
@@ -571,7 +580,7 @@ async function runMobileChatViewport(client, width, height, label) {
         input: rect('#sendTextInput'),
         panel: rect('#bottomPanel'),
         actions: rect('.console-actions'),
-        actionOrder: Array.from(document.querySelectorAll('.console-actions button'))
+        actionOrder: Array.from(document.querySelectorAll('.console-actions > button, .console-actions > .special-key-menu > button'))
           .map((button) => ({
             id: button.id,
             left: button.getBoundingClientRect().left
@@ -585,13 +594,14 @@ async function runMobileChatViewport(client, width, height, label) {
       const imageDuringSend = {
         sendDisabled: document.querySelector('#sendTextBtn').disabled,
         imageDisabled: document.querySelector('#attachImageBtn').disabled,
+        keyMenuDisabled: document.querySelector('#specialKeyMenuBtn').disabled,
         sendText: document.querySelector('#sendTextBtn').textContent.trim()
       };
       await sendComposerShortcut();
       imageSendRelease?.();
       await imageSendPromise;
       const imageComposer = {
-        calls: composerCalls.slice(multilineComposer.calls.length + newlineOnlyComposer.calls.length + emptyComposer.calls.length),
+        calls: composerCalls.slice(multilineComposer.calls.length + newlineOnlyComposer.calls.length + emptyComposer.calls.length + specialKeyComposer.calls.length),
         beforeSend: imageBeforeSend,
         duringSend: imageDuringSend,
         valueAfter: composer.value,
@@ -634,6 +644,7 @@ async function runMobileChatViewport(client, width, height, label) {
           multiline: multilineComposer,
           newlineOnly: newlineOnlyComposer,
           empty: emptyComposer,
+          specialKey: specialKeyComposer,
           image: imageComposer
         }
       };
@@ -881,6 +892,12 @@ async function runMobileChatViewport(client, width, height, label) {
     mobileFlow.composerEnter.empty.calls.length !== 1 ||
     mobileFlow.composerEnter.empty.calls[0].url !== "/api/send-key" ||
     mobileFlow.composerEnter.empty.calls[0].body.key !== "enter" ||
+    mobileFlow.composerEnter.specialKey.calls.length !== 1 ||
+    mobileFlow.composerEnter.specialKey.calls[0].url !== "/api/send-key" ||
+    mobileFlow.composerEnter.specialKey.calls[0].body.key !== "tab" ||
+    mobileFlow.composerEnter.specialKey.menuHiddenAfterClick !== true ||
+    !mobileFlow.composerEnter.specialKey.menuLabels.includes("Ctrl+A") ||
+    !mobileFlow.composerEnter.specialKey.menuLabels.includes("Tab") ||
     mobileFlow.composerEnter.image.calls.length !== 1 ||
     mobileFlow.composerEnter.image.calls[0].url !== "/api/send-image" ||
     mobileFlow.composerEnter.image.calls[0].body.text !== "look at this" ||
@@ -892,12 +909,13 @@ async function runMobileChatViewport(client, width, height, label) {
     mobileFlow.composerEnter.image.beforeSend.input.height <= 0 ||
     mobileFlow.composerEnter.image.beforeSend.panel.height <= 0 ||
     mobileFlow.composerEnter.image.beforeSend.actions.height <= 0 ||
-    mobileFlow.composerEnter.image.beforeSend.actionOrder.join(",") !== "attachImageBtn,sendEscBtn,sendCtrlCBtn,sendCtrlDBtn,sendEnterBtn,sendTextBtn" ||
+    mobileFlow.composerEnter.image.beforeSend.actionOrder.join(",") !== "attachImageBtn,specialKeyMenuBtn,sendEnterBtn,sendTextBtn" ||
     mobileFlow.composerEnter.image.beforeSend.attachment.bottom > mobileFlow.composerEnter.image.beforeSend.input.top ||
     mobileFlow.composerEnter.image.beforeSend.input.bottom > mobileFlow.composerEnter.image.beforeSend.actions.top ||
     mobileFlow.composerEnter.image.beforeSend.actions.bottom > mobileFlow.composerEnter.image.beforeSend.panel.bottom + 1 ||
     mobileFlow.composerEnter.image.duringSend.sendDisabled !== true ||
     mobileFlow.composerEnter.image.duringSend.imageDisabled !== true ||
+    mobileFlow.composerEnter.image.duringSend.keyMenuDisabled !== true ||
     mobileFlow.composerEnter.image.duringSend.sendText !== "Sending" ||
     mobileFlow.composerEnter.image.valueAfter !== "" ||
     mobileFlow.composerEnter.image.attachmentHidden !== true ||
@@ -1290,6 +1308,46 @@ async function runViewport(client, width, height, label) {
       };
     })()`
   );
+  const specialKeyLayerWorked = await evaluate(
+    client,
+    `(() => {
+      closePreview();
+      closeSpecialKeyMenu();
+      const button = document.querySelector('#specialKeyMenuBtn');
+      const popover = document.querySelector('#specialKeyMenuPopover');
+      const panel = document.querySelector('#bottomPanel');
+      button.click();
+
+      const popoverRect = popover.getBoundingClientRect();
+      const panelRect = panel.getBoundingClientRect();
+      const x = Math.round(popoverRect.left + popoverRect.width / 2);
+      const desiredY = panelRect.top - 12;
+      const y = Math.round(Math.min(popoverRect.bottom - 8, Math.max(popoverRect.top + 8, desiredY)));
+      const hit = document.elementFromPoint(x, y);
+      const result = {
+        hidden: popover.hidden,
+        expanded: button.getAttribute('aria-expanded'),
+        popover: {
+          top: Math.round(popoverRect.top),
+          bottom: Math.round(popoverRect.bottom),
+          width: Math.round(popoverRect.width),
+          height: Math.round(popoverRect.height)
+        },
+        panel: {
+          top: Math.round(panelRect.top),
+          bottom: Math.round(panelRect.bottom)
+        },
+        testPoint: { x, y },
+        testPointAbovePanel: y < panelRect.top,
+        hitId: hit?.id || '',
+        hitClass: String(hit?.className || ''),
+        hitInMenu: Boolean(hit?.closest('#specialKeyMenuPopover'))
+      };
+
+      closeSpecialKeyMenu();
+      return result;
+    })()`
+  );
   await evaluate(
     client,
     `(() => {
@@ -1303,7 +1361,14 @@ async function runViewport(client, width, height, label) {
     })()`
   );
   await waitForExpression(client, "document.querySelector('#statusMessage')?.textContent.includes('Select a pane first')");
-  await evaluate(client, "document.querySelector('#sendEscBtn').click(); true");
+  await evaluate(
+    client,
+    `(() => {
+      document.querySelector('#specialKeyMenuBtn').click();
+      document.querySelector('[data-special-key-id="escape"]').click();
+      return true;
+    })()`
+  );
   await waitForExpression(client, "document.querySelector('#statusMessage')?.textContent.includes('Select a pane first')");
   await evaluate(client, "document.querySelector('#resizeToggle').click(); true");
   await waitForExpression(client, "document.querySelector('#appShell').classList.contains('resize-enabled')");
@@ -1361,8 +1426,17 @@ async function runViewport(client, width, height, label) {
         mobileSwitcherWorked: ${JSON.stringify(mobileSwitcherWorked)},
         previewDrawerWorked: ${JSON.stringify(previewDrawerWorked)},
         screenModeWheelEdges: ${JSON.stringify(screenModeWheelEdges)},
+        specialKeyLayerWorked: ${JSON.stringify(specialKeyLayerWorked)},
         escClickStatus: document.querySelector('#statusMessage').textContent,
-        ctrlDText: document.querySelector('#sendCtrlDBtn').textContent,
+        specialKeyMenu: {
+          buttonText: document.querySelector('#specialKeyMenuBtn').textContent.trim(),
+          expanded: document.querySelector('#specialKeyMenuBtn').getAttribute('aria-expanded'),
+          visibleActionIds: Array.from(document.querySelectorAll('.console-actions > button, .console-actions > .special-key-menu > button'))
+            .filter((button) => getComputedStyle(button).display !== 'none')
+            .map((button) => button.id),
+          labels: Array.from(document.querySelectorAll('#specialKeyMenuPopover [data-special-key-id]')).map((button) => button.textContent.trim()),
+          keys: Array.from(document.querySelectorAll('#specialKeyMenuPopover [data-special-key-id]')).map((button) => button.dataset.specialKeyId)
+        },
         panelImageButton: {
           headerDisplay: getComputedStyle(document.querySelector('#attachImageHeadBtn')).display,
           headerLabel: document.querySelector('#attachImageHeadBtn').getAttribute('aria-label'),
@@ -1468,8 +1542,19 @@ async function runViewport(client, width, height, label) {
     metrics.screenModeWheelEdges.scrollWindowCalls.length < 2 ||
     metrics.screenModeWheelEdges.scrollWindowCalls[0].lines <= 0 ||
     metrics.screenModeWheelEdges.scrollWindowCalls[1].lines >= 0 ||
+    metrics.specialKeyLayerWorked.hidden !== false ||
+    metrics.specialKeyLayerWorked.expanded !== "true" ||
+    metrics.specialKeyLayerWorked.popover.top >= metrics.specialKeyLayerWorked.panel.top ||
+    metrics.specialKeyLayerWorked.testPointAbovePanel !== true ||
+    metrics.specialKeyLayerWorked.hitInMenu !== true ||
     !metrics.escClickStatus.includes("Select a pane first") ||
-    !metrics.ctrlDText.includes("Ctrl+D") ||
+    metrics.specialKeyMenu.buttonText !== "Keys" ||
+    metrics.specialKeyMenu.expanded !== "false" ||
+    metrics.specialKeyMenu.visibleActionIds.join(",") !== "sendTextBtn,sendEnterBtn,specialKeyMenuBtn" ||
+    !metrics.specialKeyMenu.labels.includes("Ctrl+A") ||
+    !metrics.specialKeyMenu.labels.includes("Ctrl+D") ||
+    !metrics.specialKeyMenu.labels.includes("Tab") ||
+    !metrics.specialKeyMenu.keys.includes("arrow-up") ||
     metrics.panelImageButton.headerLabel !== "Attach image" ||
     metrics.panelImageButton.actionLabel !== "Attach image" ||
     metrics.panelImageButton.headerIcon !== true ||

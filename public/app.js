@@ -145,9 +145,9 @@ const elements = {
   refreshTextBtn: document.querySelector("#refreshTextBtn"),
   sendTextBtn: document.querySelector("#sendTextBtn"),
   sendEnterBtn: document.querySelector("#sendEnterBtn"),
-  sendEscBtn: document.querySelector("#sendEscBtn"),
-  sendCtrlCBtn: document.querySelector("#sendCtrlCBtn"),
-  sendCtrlDBtn: document.querySelector("#sendCtrlDBtn"),
+  specialKeyMenu: document.querySelector("#specialKeyMenu"),
+  specialKeyMenuBtn: document.querySelector("#specialKeyMenuBtn"),
+  specialKeyMenuPopover: document.querySelector("#specialKeyMenuPopover"),
   sendForm: document.querySelector("#sendForm"),
   sendTextInput: document.querySelector("#sendTextInput"),
   composerStack: document.querySelector("#composerStack"),
@@ -1112,20 +1112,67 @@ function renderImageAttachment() {
   elements.imageAttachmentInfo.textContent = `${attachment.type} · ${formatBytes(attachment.size)}`;
 }
 
+function renderSpecialKeyMenu() {
+  elements.specialKeyMenuPopover.innerHTML = "";
+
+  COMPOSER_UTILS.SPECIAL_KEY_GROUPS.forEach((group) => {
+    const groupNode = document.createElement("section");
+    groupNode.className = "special-key-group";
+
+    const label = document.createElement("p");
+    label.className = "special-key-group-label";
+    label.textContent = group.label;
+    groupNode.appendChild(label);
+
+    const grid = document.createElement("div");
+    grid.className = "special-key-grid";
+
+    group.keys.forEach((item) => {
+      const button = document.createElement("button");
+      button.className = "special-key-item";
+      button.type = "button";
+      button.role = "menuitem";
+      button.dataset.specialKeyId = item.id;
+      button.textContent = item.label;
+      button.title = item.key;
+      grid.appendChild(button);
+    });
+
+    groupNode.appendChild(grid);
+    elements.specialKeyMenuPopover.appendChild(groupNode);
+  });
+}
+
+function closeSpecialKeyMenu() {
+  elements.specialKeyMenuPopover.hidden = true;
+  elements.specialKeyMenuBtn.setAttribute("aria-expanded", "false");
+}
+
+function toggleSpecialKeyMenu(forceOpen = null) {
+  if (state.composerSending) {
+    return;
+  }
+
+  const shouldOpen = forceOpen === null ? elements.specialKeyMenuPopover.hidden : Boolean(forceOpen);
+  elements.specialKeyMenuPopover.hidden = !shouldOpen;
+  elements.specialKeyMenuBtn.setAttribute("aria-expanded", String(shouldOpen));
+}
+
 function setComposerBusy(isBusy) {
   state.composerSending = Boolean(isBusy);
   elements.sendForm.classList.toggle("composer-busy", state.composerSending);
   elements.sendForm.setAttribute("aria-busy", String(state.composerSending));
   elements.sendTextBtn.disabled = state.composerSending;
   elements.sendEnterBtn.disabled = state.composerSending;
-  elements.sendEscBtn.disabled = state.composerSending;
-  elements.sendCtrlCBtn.disabled = state.composerSending;
-  elements.sendCtrlDBtn.disabled = state.composerSending;
+  elements.specialKeyMenuBtn.disabled = state.composerSending;
   elements.attachImageHeadBtn.disabled = state.composerSending;
   elements.attachImageBtn.disabled = state.composerSending;
   elements.removeImageBtn.disabled = state.composerSending;
   elements.imageInput.disabled = state.composerSending;
   elements.sendTextBtn.textContent = state.composerSending ? "Sending" : "Send";
+  if (state.composerSending) {
+    closeSpecialKeyMenu();
+  }
 }
 
 async function attachImageFile(file) {
@@ -2856,6 +2903,17 @@ function attachEvents() {
 
   document.addEventListener("pointerdown", maybeCloseUnpinnedBrowser, true);
   document.addEventListener("focusin", maybeCloseUnpinnedBrowser, true);
+  document.addEventListener("pointerdown", (event) => {
+    if (!elements.specialKeyMenu.contains(event.target)) {
+      closeSpecialKeyMenu();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !elements.specialKeyMenuPopover.hidden) {
+      closeSpecialKeyMenu();
+      elements.specialKeyMenuBtn.focus();
+    }
+  });
   window.addEventListener("message", handleBrowserMessage);
 
   elements.sendEnterBtn.addEventListener("click", async () => {
@@ -2866,25 +2924,25 @@ function attachEvents() {
     }
   });
 
-  elements.sendEscBtn.addEventListener("click", async () => {
-    try {
-      await sendKey("escape");
-    } catch (error) {
-      setStatus(error.message, "danger");
-    }
+  elements.specialKeyMenuBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleSpecialKeyMenu();
   });
 
-  elements.sendCtrlCBtn.addEventListener("click", async () => {
-    try {
-      await sendKey("ctrl+c");
-    } catch (error) {
-      setStatus(error.message, "danger");
+  elements.specialKeyMenuPopover.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-special-key-id]");
+    if (!button || state.composerSending) {
+      return;
     }
-  });
 
-  elements.sendCtrlDBtn.addEventListener("click", async () => {
+    const item = COMPOSER_UTILS.getSpecialKeyById(button.dataset.specialKeyId);
+    if (!item) {
+      return;
+    }
+
     try {
-      await sendKey("ctrl+d");
+      closeSpecialKeyMenu();
+      await sendKey(item.key);
     } catch (error) {
       setStatus(error.message, "danger");
     }
@@ -3008,6 +3066,7 @@ async function init() {
   loadUiPreferences();
   applyUiState();
   syncMobileHistory(state.mobileScreen, "replace");
+  renderSpecialKeyMenu();
   attachEvents();
   attachWheelContainment();
 
