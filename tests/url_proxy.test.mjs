@@ -47,6 +47,22 @@ test("proxy URLs preserve target and absolute resource URL", () => {
   );
 });
 
+test("proxy URLs can carry scoped preview access tokens", () => {
+  assert.equal(
+    createProxyUrl("file:///tmp/report/movie.mp4", "local", "token.abc"),
+    "/api/url-resource?targetId=local&url=file%3A%2F%2F%2Ftmp%2Freport%2Fmovie.mp4&access=token.abc"
+  );
+
+  const rewritten = rewriteHtmlResources(
+    '<video src="movie.mp4"></video>',
+    "file:///tmp/report/index.html",
+    "local",
+    { accessToken: "token.abc" }
+  );
+
+  assert.match(rewritten, /access=token\.abc/);
+});
+
 test("HTML bridge script reports browser loads and intercepts in-frame navigation", () => {
   const html = "<!doctype html><body><a href=\"next.html\">next</a></body>";
   const rewritten = rewriteHtmlResources(html, "https://example.com/report/index.html", "target-a");
@@ -64,6 +80,7 @@ test("proxied browser render resources opt into anonymous CORS", () => {
     <script type="module" src="./app.js"></script>
     <img src="textures/diffuse.png">
     <video src="movies/demo.mp4"></video>
+    <video controls><source src="movies/clip.mp4" type="video/mp4"></video>
     <link rel="stylesheet" href="style.css">
     <a href="next.html">next</a>
   `;
@@ -73,6 +90,7 @@ test("proxied browser render resources opt into anonymous CORS", () => {
   assert.match(rewritten, /<script[^>]+crossorigin="anonymous"[^>]*>/);
   assert.match(rewritten, /<img[^>]+crossorigin="anonymous"[^>]*>/);
   assert.match(rewritten, /<video[^>]+crossorigin="anonymous"[^>]*>/);
+  assert.match(rewritten, /<source[^>]+src="\/api\/url-resource\?targetId=target-a&amp;url=https%3A%2F%2Fexample.com%2Fscene%2Fmovies%2Fclip.mp4"/);
   assert.match(rewritten, /<link[^>]+crossorigin="anonymous"[^>]*>/);
   assert.doesNotMatch(rewritten, /<a[^>]+crossorigin=/);
 });

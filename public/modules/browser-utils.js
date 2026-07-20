@@ -43,11 +43,16 @@
     return html;
   }
 
-  function createPreviewResourceUrl(url, targetId) {
+  function createPreviewResourceUrl(url, targetId, accessToken = "") {
     const params = new URLSearchParams({
       targetId,
       url
     });
+
+    if (accessToken) {
+      params.set("access", accessToken);
+    }
+
     return `/api/url-resource?${params.toString()}`;
   }
 

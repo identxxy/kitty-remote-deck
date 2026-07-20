@@ -187,7 +187,14 @@ async function runMobileChatViewport(client, width, height, label) {
     `(async () => {
       const rect = (selector) => {
         const item = document.querySelector(selector).getBoundingClientRect();
-        return { width: Math.round(item.width), height: Math.round(item.height), top: Math.round(item.top), bottom: Math.round(item.bottom) };
+        return {
+          width: Math.round(item.width),
+          height: Math.round(item.height),
+          top: Math.round(item.top),
+          right: Math.round(item.right),
+          bottom: Math.round(item.bottom),
+          left: Math.round(item.left)
+        };
       };
       const display = (selector) => getComputedStyle(document.querySelector(selector)).display;
       const point = (x, y) => {
@@ -558,11 +565,29 @@ async function runMobileChatViewport(client, width, height, label) {
       };
 
       document.querySelector('#specialKeyMenuBtn').click();
+      const specialKeyMenuRect = document.querySelector('#specialKeyMenuPopover').getBoundingClientRect();
+      const specialKeyMenuHit = document.elementFromPoint(
+        specialKeyMenuRect.left + specialKeyMenuRect.width / 2,
+        specialKeyMenuRect.top + Math.min(24, Math.max(8, specialKeyMenuRect.height / 3))
+      );
+      const specialKeyMenuGeometry = {
+        hidden: document.querySelector('#specialKeyMenuPopover').hidden,
+        top: Math.round(specialKeyMenuRect.top),
+        right: Math.round(specialKeyMenuRect.right),
+        bottom: Math.round(specialKeyMenuRect.bottom),
+        left: Math.round(specialKeyMenuRect.left),
+        width: Math.round(specialKeyMenuRect.width),
+        height: Math.round(specialKeyMenuRect.height),
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        hitInMenu: Boolean(specialKeyMenuHit?.closest('#specialKeyMenuPopover'))
+      };
       document.querySelector('[data-special-key-id="tab"]').click();
       await new Promise((resolve) => setTimeout(resolve, 0));
       const specialKeyComposer = {
         calls: composerCalls.slice(multilineComposer.calls.length + newlineOnlyComposer.calls.length + emptyComposer.calls.length),
         menuHiddenAfterClick: document.querySelector('#specialKeyMenuPopover').hidden,
+        menuGeometry: specialKeyMenuGeometry,
         menuLabels: Array.from(document.querySelectorAll('#specialKeyMenuPopover [data-special-key-id]')).map((button) => button.textContent.trim())
       };
 
@@ -896,6 +921,12 @@ async function runMobileChatViewport(client, width, height, label) {
     mobileFlow.composerEnter.specialKey.calls[0].url !== "/api/send-key" ||
     mobileFlow.composerEnter.specialKey.calls[0].body.key !== "tab" ||
     mobileFlow.composerEnter.specialKey.menuHiddenAfterClick !== true ||
+    mobileFlow.composerEnter.specialKey.menuGeometry.hidden !== false ||
+    mobileFlow.composerEnter.specialKey.menuGeometry.left < 0 ||
+    mobileFlow.composerEnter.specialKey.menuGeometry.right > width ||
+    mobileFlow.composerEnter.specialKey.menuGeometry.top < 0 ||
+    mobileFlow.composerEnter.specialKey.menuGeometry.bottom > height ||
+    mobileFlow.composerEnter.specialKey.menuGeometry.hitInMenu !== true ||
     !mobileFlow.composerEnter.specialKey.menuLabels.includes("Ctrl+A") ||
     !mobileFlow.composerEnter.specialKey.menuLabels.includes("Tab") ||
     mobileFlow.composerEnter.image.calls.length !== 1 ||
@@ -956,6 +987,19 @@ async function runViewport(client, width, height, label) {
     }))()`
   );
   await evaluate(client, "setAuthState(true, { label: 'smoke', tokenPreview: 'krd_smoke...' }); true");
+  await evaluate(
+    client,
+    `(() => {
+      const originalApiFetch = apiFetch;
+      apiFetch = async (url, options = {}) => {
+        if (String(url).startsWith('/api/url-access-token?')) {
+          return { accessToken: 'smoke-preview-access', expiresAt: new Date(Date.now() + 3600000).toISOString() };
+        }
+        return originalApiFetch(url, options);
+      };
+      return true;
+    })()`
+  );
   await waitForExpression(client, "document.querySelector('#sshSidebarView') && !document.querySelector('#sshSidebarView').hidden");
   if (label === "mobile") {
     return runMobileChatViewport(client, width, height, label);
@@ -1149,15 +1193,18 @@ async function runViewport(client, width, height, label) {
         terminalRootHistory
       };
       document.querySelector('#browserBackBtn').click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
       opened.backFrameSrc = document.querySelector('#urlPreviewFrame').getAttribute('src');
       opened.backAddressInput = document.querySelector('#browserAddressInput').value;
       opened.forwardEnabledAfterBack = document.querySelector('#browserForwardBtn').disabled === false;
       document.querySelector('#browserForwardBtn').click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
       opened.forwardFrameSrc = document.querySelector('#urlPreviewFrame').getAttribute('src');
       opened.forwardAddressInput = document.querySelector('#browserAddressInput').value;
       const history = document.querySelector('#browserHistorySelect');
       history.value = '1';
       history.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
       opened.historyJumpInput = document.querySelector('#browserAddressInput').value;
       handleBrowserMessage({
         source: document.querySelector('#urlPreviewFrame').contentWindow,
@@ -1168,6 +1215,7 @@ async function runViewport(client, width, height, label) {
           url: 'https://example.com/from-frame.html'
         }
       });
+      await new Promise((resolve) => setTimeout(resolve, 0));
       opened.frameNavigateInput = document.querySelector('#browserAddressInput').value;
       opened.frameNavigateSrc = document.querySelector('#urlPreviewFrame').getAttribute('src');
       state.resizeEnabled = true;
@@ -1192,6 +1240,7 @@ async function runViewport(client, width, height, label) {
       opened.closed = opened.unpinnedAutoClosed;
       opened.reopenVisible = document.querySelector('#reopenPreviewBtn').hidden === false;
       document.querySelector('#reopenPreviewBtn').click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
       opened.reopened = document.querySelector('#appShell').classList.contains('preview-open');
       opened.reopenedFrameSrc = document.querySelector('#urlPreviewFrame').getAttribute('src');
       return opened;

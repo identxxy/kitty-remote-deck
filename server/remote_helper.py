@@ -7,11 +7,13 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
+from urllib.error import HTTPError
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, url2pathname, urlopen
 
 
 MAX_PREVIEW_BYTES = 10_000_000
+MAX_RESOURCE_BYTES = 8_000_000
 
 
 def respond(ok, data=None, error=None):
@@ -166,6 +168,51 @@ def read_limited_bytes(path):
     return raw[:MAX_PREVIEW_BYTES], len(raw) > MAX_PREVIEW_BYTES
 
 
+def parse_range_header(range_header, size):
+    value = (range_header or "").strip()
+    if not value.startswith("bytes=") or size < 1:
+        return None
+
+    spec = value[6:]
+    if "," in spec or "-" not in spec:
+        return None
+
+    start_text, end_text = spec.split("-", 1)
+    if not start_text and not end_text:
+        return None
+
+    try:
+        if not start_text:
+            suffix_length = int(end_text)
+            if suffix_length <= 0:
+                return None
+            start = max(0, size - suffix_length)
+            end = size - 1
+        else:
+            start = int(start_text)
+            end = int(end_text) if end_text else size - 1
+    except ValueError:
+        return None
+
+    if start < 0 or end < start or start >= size:
+        return None
+
+    end = min(end, size - 1)
+    if end - start + 1 > MAX_RESOURCE_BYTES:
+        end = start + MAX_RESOURCE_BYTES - 1
+
+    return start, min(end, size - 1)
+
+
+def make_resource_response(url, final_url, raw, content_type, status_code=200, content_range=None, truncated=False):
+    response = make_fetch_response(url, final_url, raw, content_type, truncated)
+    response["statusCode"] = status_code
+    response["acceptRanges"] = "bytes"
+    if content_range:
+        response["contentRange"] = content_range
+    return response
+
+
 def fetch_file_url(url, parsed):
     if parsed.netloc and parsed.netloc not in ("localhost", "127.0.0.1"):
         raise RuntimeError("file:// URLs must point to the selected host.")
@@ -179,6 +226,52 @@ def fetch_file_url(url, parsed):
     return make_fetch_response(url, url, raw, content_type, truncated)
 
 
+def fetch_file_resource(url, parsed, range_header):
+    if parsed.netloc and parsed.netloc not in ("localhost", "127.0.0.1"):
+        raise RuntimeError("file:// URLs must point to the selected host.")
+
+    file_path = url2pathname(unquote(parsed.path))
+    if not file_path:
+        raise RuntimeError("file:// URL is missing a path.")
+    if not os.path.isfile(file_path):
+        raise RuntimeError("file:// URL must point to a regular file.")
+
+    size = os.path.getsize(file_path)
+    content_type = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+
+    if range_header:
+        parsed_range = parse_range_header(range_header, size)
+        if not parsed_range:
+            return {
+                "url": url,
+                "finalUrl": url,
+                "contentType": content_type,
+                "bodyBase64": "",
+                "byteLength": 0,
+                "statusCode": 416,
+                "acceptRanges": "bytes",
+                "contentRange": f"bytes */{size}",
+                "truncated": False,
+                "fetchedAt": utc_now(),
+            }
+
+        start, end = parsed_range
+        with open(file_path, "rb") as handle:
+            handle.seek(start)
+            raw = handle.read(end - start + 1)
+        return make_resource_response(
+            url,
+            url,
+            raw,
+            content_type,
+            status_code=206,
+            content_range=f"bytes {start}-{end}/{size}",
+        )
+
+    raw, truncated = read_limited_bytes(file_path)
+    return make_resource_response(url, url, raw, content_type, truncated=truncated)
+
+
 def fetch_http_url(url):
     request = Request(url, headers={"User-Agent": "KittyRemoteDeck/0.1"})
     with urlopen(request, timeout=15) as response:
@@ -187,6 +280,38 @@ def fetch_http_url(url):
         raw = raw[:MAX_PREVIEW_BYTES]
         content_type = response.headers.get("content-type") or "application/octet-stream"
         return make_fetch_response(url, response.geturl(), raw, content_type, truncated)
+
+
+def fetch_http_resource(url, range_header):
+    headers = {"User-Agent": "KittyRemoteDeck/0.1"}
+    if range_header:
+        headers["Range"] = range_header
+    request = Request(url, headers=headers)
+
+    try:
+        response_context = urlopen(request, timeout=15)
+    except HTTPError as error:
+        if error.code not in (206, 416):
+            raise
+        response_context = error
+
+    response = response_context
+    try:
+        raw = response.read(MAX_RESOURCE_BYTES + 1)
+        truncated = len(raw) > MAX_RESOURCE_BYTES
+        raw = raw[:MAX_RESOURCE_BYTES]
+        content_type = response.headers.get("content-type") or "application/octet-stream"
+        return make_resource_response(
+            url,
+            response.geturl(),
+            raw,
+            content_type,
+            status_code=getattr(response, "status", None) or response.getcode(),
+            content_range=response.headers.get("content-range"),
+            truncated=truncated,
+        )
+    finally:
+        response.close()
 
 
 def action_fetch_url():
@@ -199,6 +324,21 @@ def action_fetch_url():
         return fetch_file_url(url, parsed)
     if parsed.scheme in ("http", "https"):
         return fetch_http_url(url)
+
+    raise RuntimeError("Only file://, http://, and https:// URLs are supported.")
+
+
+def action_fetch_url_resource():
+    url = (PAYLOAD.get("url") or "").strip()
+    if not url:
+        raise RuntimeError("URL is required.")
+
+    range_header = (PAYLOAD.get("range") or "").strip()
+    parsed = urlparse(url)
+    if parsed.scheme == "file":
+        return fetch_file_resource(url, parsed, range_header)
+    if parsed.scheme in ("http", "https"):
+        return fetch_http_resource(url, range_header)
 
     raise RuntimeError("Only file://, http://, and https:// URLs are supported.")
 
@@ -365,6 +505,7 @@ def action_create_panel():
 ACTIONS = {
     "test": action_test,
     "fetch_url": action_fetch_url,
+    "fetch_url_resource": action_fetch_url_resource,
     "list_sessions": action_list_sessions,
     "get_screen": action_get_screen,
     "scroll_window": action_scroll_window,

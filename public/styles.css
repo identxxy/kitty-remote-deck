@@ -2075,9 +2075,15 @@ textarea::-webkit-scrollbar-thumb:hover {
   }
 
   .special-key-popover {
-    right: 0;
-    bottom: calc(100% + 10px);
-    width: min(330px, calc(100vw - 16px));
+    position: fixed;
+    z-index: 90;
+    right: max(8px, env(safe-area-inset-right, 0px));
+    bottom: calc(48px + env(safe-area-inset-bottom, 0px));
+    left: max(8px, env(safe-area-inset-left, 0px));
+    width: auto;
+    max-height: min(420px, calc(100dvh - 72px));
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
   }
 
   .preview-drawer {

@@ -66,6 +66,8 @@ const state = {
   previewUrl: "",
   previewHistory: [],
   previewHistoryIndex: -1,
+  previewAccessToken: "",
+  previewAccessExpiresAt: "",
   mobileScreen: "connect",
   mobileTerminalWidth: "fit",
   resizeEnabled: false,
@@ -852,7 +854,7 @@ function setPreviewStatus(message, mode) {
 }
 
 function createPreviewResourceUrl(url, targetId) {
-  return BROWSER_UTILS.createPreviewResourceUrl(url, targetId);
+  return BROWSER_UTILS.createPreviewResourceUrl(url, targetId, state.previewAccessToken);
 }
 
 function normalizeBrowserUrl(rawUrl) {
@@ -880,6 +882,24 @@ function rememberPreviewUrl(url, mode = "push") {
 
 function replaceLoadedPreviewUrl(url) {
   applyPreviewHistoryState(PREVIEW_HISTORY.replaceLoaded(getPreviewHistoryState(), url));
+}
+
+async function refreshPreviewAccessToken() {
+  const target = getSelectedTarget();
+  if (!target || !state.previewUrl) {
+    state.previewAccessToken = "";
+    state.previewAccessExpiresAt = "";
+    return false;
+  }
+
+  const params = new URLSearchParams({
+    targetId: state.selectedTargetId,
+    url: state.previewUrl
+  });
+  const data = await apiFetch(`/api/url-access-token?${params.toString()}`);
+  state.previewAccessToken = data.accessToken || "";
+  state.previewAccessExpiresAt = data.expiresAt || "";
+  return Boolean(state.previewAccessToken);
 }
 
 function syncPreviewFrame() {
@@ -1811,13 +1831,14 @@ function toggleBrowserPin() {
   applyUiState();
 }
 
-function reopenPreview() {
+async function reopenPreview() {
   if (!state.previewUrl) {
     setPreviewStatus("No Browser URL yet.", "neutral");
     return;
   }
 
   state.previewVisible = true;
+  await refreshPreviewAccessToken();
   syncPreviewFrame();
   if (isMobileViewport() && state.mobileScreen === "chat") {
     setMobileScreen("browser");
@@ -1826,7 +1847,7 @@ function reopenPreview() {
   applyUiState();
 }
 
-function goBackPreview() {
+async function goBackPreview() {
   const nextHistory = PREVIEW_HISTORY.goBack(getPreviewHistoryState());
   if (!nextHistory) {
     closePreview();
@@ -1835,6 +1856,7 @@ function goBackPreview() {
 
   applyPreviewHistoryState(nextHistory);
   state.previewVisible = true;
+  await refreshPreviewAccessToken();
   syncPreviewFrame();
   if (isMobileViewport() && state.mobileScreen === "chat") {
     setMobileScreen("browser");
@@ -1843,7 +1865,7 @@ function goBackPreview() {
   applyUiState();
 }
 
-function goForwardPreview() {
+async function goForwardPreview() {
   const nextHistory = PREVIEW_HISTORY.goForward(getPreviewHistoryState());
   if (!nextHistory) {
     return;
@@ -1851,6 +1873,7 @@ function goForwardPreview() {
 
   applyPreviewHistoryState(nextHistory);
   state.previewVisible = true;
+  await refreshPreviewAccessToken();
   syncPreviewFrame();
   if (isMobileViewport() && state.mobileScreen === "chat") {
     setMobileScreen("browser");
@@ -1859,7 +1882,7 @@ function goForwardPreview() {
   applyUiState();
 }
 
-function jumpPreviewHistory(index) {
+async function jumpPreviewHistory(index) {
   const nextHistory = PREVIEW_HISTORY.jump(getPreviewHistoryState(), index);
   if (!nextHistory) {
     return;
@@ -1867,6 +1890,7 @@ function jumpPreviewHistory(index) {
 
   applyPreviewHistoryState(nextHistory);
   state.previewVisible = true;
+  await refreshPreviewAccessToken();
   syncPreviewFrame();
   if (isMobileViewport() && state.mobileScreen === "chat") {
     setMobileScreen("browser");
@@ -1887,6 +1911,7 @@ async function loadUrlPreview(rawUrl, options = {}) {
 
   rememberPreviewUrl(url, options.history || "push");
   state.previewVisible = true;
+  await refreshPreviewAccessToken();
   syncPreviewFrame();
   if (isMobileViewport() && state.mobileScreen === "chat") {
     setMobileScreen("browser");
@@ -2878,12 +2903,18 @@ function attachEvents() {
 
   elements.closePreviewBtn.addEventListener("click", closePreview);
   elements.mobileBrowserBackBtn.addEventListener("click", closePreview);
-  elements.reopenPreviewBtn.addEventListener("click", reopenPreview);
+  elements.reopenPreviewBtn.addEventListener("click", () => {
+    reopenPreview().catch((error) => setPreviewStatus(error.message, "danger"));
+  });
   elements.pinBrowserBtn.addEventListener("click", toggleBrowserPin);
-  elements.browserBackBtn.addEventListener("click", goBackPreview);
-  elements.browserForwardBtn.addEventListener("click", goForwardPreview);
+  elements.browserBackBtn.addEventListener("click", () => {
+    goBackPreview().catch((error) => setPreviewStatus(error.message, "danger"));
+  });
+  elements.browserForwardBtn.addEventListener("click", () => {
+    goForwardPreview().catch((error) => setPreviewStatus(error.message, "danger"));
+  });
   elements.browserHistorySelect.addEventListener("change", () => {
-    jumpPreviewHistory(elements.browserHistorySelect.value);
+    jumpPreviewHistory(elements.browserHistorySelect.value).catch((error) => setPreviewStatus(error.message, "danger"));
   });
   elements.browserAddressForm.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -3050,6 +3081,7 @@ async function bootAuthenticatedWorkspace() {
     state.sidebarVisible = true;
   }
   if (state.previewVisible && state.previewUrl) {
+    await refreshPreviewAccessToken();
     syncPreviewFrame();
   }
   renderSocketOptions([], "");

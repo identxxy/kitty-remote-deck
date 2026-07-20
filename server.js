@@ -1,8 +1,9 @@
 const http = require("http");
+const crypto = require("crypto");
 const fs = require("fs");
 const fsp = fs.promises;
 const path = require("path");
-const { URL } = require("url");
+const { URL, fileURLToPath } = require("url");
 const {
   authenticateSession,
   clearSession,
@@ -36,6 +37,8 @@ const CLIENT_DEBUG_LOG_FILE = path.join(TMP_DIR, "client-debug.log");
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
 const REMOTE_HELPER_PATH = path.join(ROOT_DIR, "server", "remote_helper.py");
 const MAX_IMAGE_REQUEST_BYTES = Math.ceil(MAX_IMAGE_BYTES * 1.6);
+const PREVIEW_ACCESS_TTL_MS = Number(process.env.KRD_PREVIEW_ACCESS_TTL_MS || 2 * 60 * 60 * 1000);
+const previewAccessSecret = crypto.randomBytes(32);
 const authManager = createAuthManager(AUTH_FILE);
 
 const DEFAULT_TARGET = {
@@ -55,6 +58,27 @@ const MIME_TYPES = {
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".svg": "image/svg+xml"
+};
+
+const RESOURCE_MIME_TYPES = {
+  ...MIME_TYPES,
+  ".apng": "image/apng",
+  ".avif": "image/avif",
+  ".gif": "image/gif",
+  ".ico": "image/x-icon",
+  ".jpeg": "image/jpeg",
+  ".jpg": "image/jpeg",
+  ".m4v": "video/mp4",
+  ".mov": "video/quicktime",
+  ".mp4": "video/mp4",
+  ".ogg": "video/ogg",
+  ".ogv": "video/ogg",
+  ".png": "image/png",
+  ".wasm": "application/wasm",
+  ".webm": "video/webm",
+  ".webp": "image/webp",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2"
 };
 
 let remoteHelperSource = "";
@@ -172,13 +196,26 @@ function sendText(response, statusCode, payload, contentType) {
 }
 
 function sendBuffer(response, statusCode, buffer, contentType, headers = {}) {
+  const payload = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || "");
+  response.writeHead(statusCode, {
+    "Content-Type": contentType || "application/octet-stream",
+    "Content-Length": payload.length,
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    ...headers
+  });
+  response.end(payload);
+}
+
+function sendStream(response, statusCode, stream, contentType, headers = {}) {
   response.writeHead(statusCode, {
     "Content-Type": contentType || "application/octet-stream",
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
     ...headers
   });
-  response.end(buffer);
+  stream.on("error", (error) => response.destroy(error));
+  stream.pipe(response);
 }
 
 async function appendClientDebugLog(payload, request) {
@@ -321,7 +358,7 @@ function decodeFetchedResource(data) {
   return Buffer.from(String(data.body || ""), data.encoding || "utf8");
 }
 
-function transformFetchedResource(data, targetId) {
+function transformFetchedResource(data, targetId, accessToken = "") {
   const contentType = data.contentType || "application/octet-stream";
   const finalUrl = data.finalUrl || data.url;
   const rawBuffer = decodeFetchedResource(data);
@@ -329,7 +366,7 @@ function transformFetchedResource(data, targetId) {
   if (isHtmlContentType(contentType)) {
     const html = typeof data.body === "string" ? data.body : rawBuffer.toString(data.encoding || "utf8");
     return {
-      buffer: Buffer.from(rewriteHtmlResources(html, finalUrl, targetId), data.encoding || "utf8"),
+      buffer: Buffer.from(rewriteHtmlResources(html, finalUrl, targetId, { accessToken }), data.encoding || "utf8"),
       contentType
     };
   }
@@ -337,7 +374,7 @@ function transformFetchedResource(data, targetId) {
   if (isCssContentType(contentType)) {
     const css = typeof data.body === "string" ? data.body : rawBuffer.toString(data.encoding || "utf8");
     return {
-      buffer: Buffer.from(rewriteCssResources(css, finalUrl, targetId), data.encoding || "utf8"),
+      buffer: Buffer.from(rewriteCssResources(css, finalUrl, targetId, { accessToken }), data.encoding || "utf8"),
       contentType
     };
   }
@@ -346,6 +383,280 @@ function transformFetchedResource(data, targetId) {
     buffer: rawBuffer,
     contentType
   };
+}
+
+function guessResourceContentType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  return RESOURCE_MIME_TYPES[ext] || "application/octet-stream";
+}
+
+function browserResourceHeaders(data, url, extraHeaders = {}) {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Expose-Headers": "Accept-Ranges, Content-Length, Content-Range, X-KRD-Final-URL, X-KRD-Truncated",
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    "Timing-Allow-Origin": "*",
+    "X-KRD-Final-URL": encodeURIComponent(data.finalUrl || data.url || url),
+    "X-KRD-Truncated": data.truncated ? "1" : "0",
+    ...extraHeaders
+  };
+}
+
+function filePathFromLocalFileUrl(url) {
+  const parsed = new URL(url);
+
+  if (parsed.protocol !== "file:") {
+    return "";
+  }
+
+  if (parsed.hostname && !["localhost", "127.0.0.1"].includes(parsed.hostname)) {
+    throw new Error("file:// URLs must point to the selected host.");
+  }
+
+  if (parsed.hostname === "127.0.0.1") {
+    parsed.host = "";
+  }
+
+  return fileURLToPath(parsed);
+}
+
+function parseByteRange(rangeHeader, size) {
+  const match = String(rangeHeader || "").match(/^bytes=(\d*)-(\d*)$/);
+
+  if (!match || !Number.isSafeInteger(size) || size < 1) {
+    return null;
+  }
+
+  const [, startText, endText] = match;
+  let start;
+  let end;
+
+  if (!startText && !endText) {
+    return null;
+  }
+
+  if (!startText) {
+    const suffixLength = Number(endText);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) {
+      return null;
+    }
+    start = Math.max(0, size - suffixLength);
+    end = size - 1;
+  } else {
+    start = Number(startText);
+    end = endText ? Number(endText) : size - 1;
+  }
+
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    start < 0 ||
+    end < start ||
+    start >= size
+  ) {
+    return null;
+  }
+
+  return {
+    start,
+    end: Math.min(end, size - 1)
+  };
+}
+
+function safeEqualText(left, right) {
+  const leftBuffer = Buffer.from(String(left), "utf8");
+  const rightBuffer = Buffer.from(String(right), "utf8");
+
+  if (leftBuffer.length !== rightBuffer.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function previewAccessSignature(payloadText) {
+  return crypto
+    .createHmac("sha256", previewAccessSecret)
+    .update(payloadText)
+    .digest("base64url");
+}
+
+function normalizePreviewAccessUrl(rawUrl) {
+  const parsed = new URL(rawUrl);
+
+  if (!["file:", "http:", "https:"].includes(parsed.protocol)) {
+    throw new Error("Only file://, http://, and https:// URLs are supported.");
+  }
+
+  return parsed.href;
+}
+
+function previewAccessScopeForUrl(rawUrl) {
+  const parsed = new URL(normalizePreviewAccessUrl(rawUrl));
+  const pathname = parsed.pathname || "/";
+  const prefixEnd = pathname.endsWith("/") ? pathname.length : pathname.lastIndexOf("/") + 1;
+  parsed.pathname = pathname.slice(0, Math.max(1, prefixEnd));
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.href;
+}
+
+function createPreviewAccessToken(targetId, rawUrl) {
+  const expiresAt = Date.now() + PREVIEW_ACCESS_TTL_MS;
+  const payload = {
+    targetId: String(targetId || ""),
+    urlPrefix: previewAccessScopeForUrl(rawUrl),
+    expiresAt
+  };
+  const payloadText = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const signature = previewAccessSignature(payloadText);
+
+  return {
+    accessToken: `${payloadText}.${signature}`,
+    expiresAt: new Date(expiresAt).toISOString(),
+    urlPrefix: payload.urlPrefix
+  };
+}
+
+function verifyPreviewAccessToken(accessToken, targetId, rawUrl) {
+  const [payloadText, signature, ...extra] = String(accessToken || "").split(".");
+
+  if (!payloadText || !signature || extra.length) {
+    return false;
+  }
+
+  const expectedSignature = previewAccessSignature(payloadText);
+  if (!safeEqualText(signature, expectedSignature)) {
+    return false;
+  }
+
+  let payload;
+
+  try {
+    payload = JSON.parse(Buffer.from(payloadText, "base64url").toString("utf8"));
+  } catch (error) {
+    return false;
+  }
+
+  if (
+    payload.targetId !== String(targetId || "") ||
+    !payload.urlPrefix ||
+    !Number.isFinite(payload.expiresAt) ||
+    payload.expiresAt < Date.now()
+  ) {
+    return false;
+  }
+
+  try {
+    return normalizePreviewAccessUrl(rawUrl).startsWith(payload.urlPrefix);
+  } catch (error) {
+    return false;
+  }
+}
+
+function hasPreviewResourceAccess(requestUrl) {
+  if (requestUrl.pathname !== "/api/url-resource") {
+    return false;
+  }
+
+  return verifyPreviewAccessToken(
+    requestUrl.searchParams.get("access") || "",
+    requestUrl.searchParams.get("targetId") || "",
+    requestUrl.searchParams.get("url") || ""
+  );
+}
+
+function sendRangeNotSatisfiable(response, size, data) {
+  sendBuffer(response, 416, Buffer.alloc(0), "application/octet-stream", browserResourceHeaders(data, data.url, {
+    "Accept-Ranges": "bytes",
+    "Content-Range": `bytes */${size}`
+  }));
+}
+
+async function serveLocalFileResource(request, response, target, url, accessToken = "") {
+  if (normalizeTransport(target.transport) !== "local") {
+    return false;
+  }
+
+  let filePath;
+
+  try {
+    filePath = filePathFromLocalFileUrl(url);
+  } catch (error) {
+    throw error;
+  }
+
+  if (!filePath) {
+    return false;
+  }
+
+  let stat;
+
+  try {
+    stat = await fsp.stat(filePath);
+  } catch (error) {
+    sendText(response, 404, "File not found.");
+    return true;
+  }
+
+  if (!stat.isFile()) {
+    sendText(response, 403, "Only regular files can be previewed.");
+    return true;
+  }
+
+  const contentType = guessResourceContentType(filePath);
+  const data = { url, finalUrl: url, truncated: false };
+  const commonHeaders = browserResourceHeaders(data, url, {
+    "Accept-Ranges": "bytes"
+  });
+  const rangeHeader = request.headers.range || "";
+
+  if (rangeHeader) {
+    const range = parseByteRange(rangeHeader, stat.size);
+
+    if (!range) {
+      sendRangeNotSatisfiable(response, stat.size, data);
+      return true;
+    }
+
+    sendStream(
+      response,
+      206,
+      fs.createReadStream(filePath, range),
+      contentType,
+      {
+        ...commonHeaders,
+        "Content-Length": range.end - range.start + 1,
+        "Content-Range": `bytes ${range.start}-${range.end}/${stat.size}`
+      }
+    );
+    return true;
+  }
+
+  if (isHtmlContentType(contentType) || isCssContentType(contentType)) {
+    const rawBuffer = await fsp.readFile(filePath);
+    const transformed = transformFetchedResource(
+      {
+        url,
+        finalUrl: url,
+        contentType,
+        bodyBase64: rawBuffer.toString("base64"),
+        body: rawBuffer.toString("utf8"),
+        encoding: "utf8",
+        truncated: false
+      },
+      target.id,
+      accessToken
+    );
+    sendBuffer(response, 200, transformed.buffer, transformed.contentType, commonHeaders);
+    return true;
+  }
+
+  sendStream(response, 200, fs.createReadStream(filePath), contentType, {
+    ...commonHeaders,
+    "Content-Length": stat.size
+  });
+  return true;
 }
 
 async function serveStaticFile(requestPath, response) {
@@ -431,7 +742,8 @@ async function handleApi(request, response, requestUrl) {
       return;
     }
 
-    const auth = await authenticateRequest(request);
+    const resourceAccessAuthorized = request.method === "GET" && hasPreviewResourceAccess(requestUrl);
+    const auth = resourceAccessAuthorized ? { previewResource: true } : await authenticateRequest(request);
 
     if (!auth) {
       sendUnauthorized(response);
@@ -442,6 +754,20 @@ async function handleApi(request, response, requestUrl) {
       const body = await parseRequestBody(request);
       await appendClientDebugLog(body, request);
       sendJson(response, 200, { ok: true });
+      return;
+    }
+
+    if (request.method === "GET" && requestUrl.pathname === "/api/url-access-token") {
+      const target = await resolveTargetFromRequest({
+        targetId: requestUrl.searchParams.get("targetId")
+      });
+      const url = requestUrl.searchParams.get("url") || "";
+
+      if (!url) {
+        throw new Error("URL is required.");
+      }
+
+      sendJson(response, 200, createPreviewAccessToken(target.id, url));
       return;
     }
 
@@ -521,23 +847,37 @@ async function handleApi(request, response, requestUrl) {
     if (request.method === "GET" && requestUrl.pathname === "/api/url-resource") {
       const targetId = requestUrl.searchParams.get("targetId") || "";
       const url = requestUrl.searchParams.get("url") || "";
+      const accessToken = requestUrl.searchParams.get("access") || "";
       const target = await resolveTargetFromRequest({ targetId });
+      const servedLocalFile = await serveLocalFileResource(request, response, target, url, accessToken);
+
+      if (servedLocalFile) {
+        return;
+      }
+
+      const rangeHeader = request.headers.range || "";
       const data = await runRemoteKittyAction(
         target,
-        "fetch_url",
+        rangeHeader ? "fetch_url_resource" : "fetch_url",
         {
-          url
+          url,
+          range: rangeHeader
         },
         45000
       );
-      const transformed = transformFetchedResource(data, target.id);
-      sendBuffer(response, 200, transformed.buffer, transformed.contentType, {
-        "Access-Control-Allow-Origin": "*",
-        "Cross-Origin-Resource-Policy": "cross-origin",
-        "Timing-Allow-Origin": "*",
-        "X-KRD-Final-URL": encodeURIComponent(data.finalUrl || data.url || url),
-        "X-KRD-Truncated": data.truncated ? "1" : "0"
+      const transformed = rangeHeader
+        ? { buffer: decodeFetchedResource(data), contentType: data.contentType || "application/octet-stream" }
+        : transformFetchedResource(data, target.id, accessToken);
+      const statusCode = Number(data.statusCode || 200);
+      const headers = browserResourceHeaders(data, url, {
+        "Accept-Ranges": data.acceptRanges || "bytes"
       });
+
+      if (data.contentRange) {
+        headers["Content-Range"] = data.contentRange;
+      }
+
+      sendBuffer(response, statusCode, transformed.buffer, transformed.contentType, headers);
       return;
     }
 

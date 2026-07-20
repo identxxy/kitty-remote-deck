@@ -53,3 +53,27 @@ test("remote helper fetches a file URL as HTML preview content", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("remote helper fetches file URL byte ranges for media preview", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "krd-url-range-"));
+  const mediaPath = path.join(dir, "demo.mp4");
+  const media = Buffer.from(Array.from({ length: 1024 }, (_, index) => index % 256));
+  await writeFile(mediaPath, media);
+
+  try {
+    const result = await runHelper("fetch_url_resource", {
+      url: `file://${mediaPath}`,
+      range: "bytes=100-199"
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.data.statusCode, 206);
+    assert.equal(result.data.contentType, "video/mp4");
+    assert.equal(result.data.contentRange, "bytes 100-199/1024");
+    assert.equal(result.data.acceptRanges, "bytes");
+    assert.equal(result.data.byteLength, 100);
+    assert.deepEqual(Buffer.from(result.data.bodyBase64, "base64"), media.subarray(100, 200));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -141,15 +141,20 @@ function resolveResourceUrl(baseUrl, candidate) {
   }
 }
 
-function createProxyUrl(resourceUrl, targetId) {
+function createProxyUrl(resourceUrl, targetId, accessToken = "") {
   const params = new URLSearchParams({
     targetId: String(targetId || ""),
     url: String(resourceUrl || "")
   });
+
+  if (accessToken) {
+    params.set("access", String(accessToken));
+  }
+
   return `${PROXY_PATH}?${params.toString()}`;
 }
 
-function rewriteSrcset(value, baseUrl, targetId) {
+function rewriteSrcset(value, baseUrl, targetId, options = {}) {
   return String(value)
     .split(",")
     .map((entry) => {
@@ -162,23 +167,23 @@ function rewriteSrcset(value, baseUrl, targetId) {
       if (!resolved) {
         return trimmed;
       }
-      return [createProxyUrl(resolved, targetId), ...parts.slice(1)].join(" ");
+      return [createProxyUrl(resolved, targetId, options.accessToken), ...parts.slice(1)].join(" ");
     })
     .join(", ");
 }
 
-function rewriteCssResources(css, baseUrl, targetId) {
+function rewriteCssResources(css, baseUrl, targetId, options = {}) {
   return String(css).replace(/url\(\s*(["']?)([^"')]+)\1\s*\)/gi, (match, quote, rawValue) => {
     const resolved = resolveResourceUrl(baseUrl, rawValue);
     if (!resolved) {
       return match;
     }
-    return `url("${createProxyUrl(resolved, targetId)}")`;
+    return `url("${createProxyUrl(resolved, targetId, options.accessToken)}")`;
   });
 }
 
-function rewriteStyleAttribute(value, baseUrl, targetId) {
-  return rewriteCssResources(value, baseUrl, targetId);
+function rewriteStyleAttribute(value, baseUrl, targetId, options = {}) {
+  return rewriteCssResources(value, baseUrl, targetId, options);
 }
 
 function ensureAnonymousCrossoriginForProxyResources(html) {
@@ -206,12 +211,12 @@ function rewriteHtmlResources(html, baseUrl, targetId, options = {}) {
       if (REWRITABLE_ATTRS.has(name)) {
         const resolved = resolveResourceUrl(baseUrl, rawValue);
         if (resolved) {
-          nextValue = createProxyUrl(resolved, targetId);
+          nextValue = createProxyUrl(resolved, targetId, options.accessToken);
         }
       } else if (name === "srcset") {
-        nextValue = rewriteSrcset(rawValue, baseUrl, targetId);
+        nextValue = rewriteSrcset(rawValue, baseUrl, targetId, options);
       } else if (name === "style") {
-        nextValue = rewriteStyleAttribute(rawValue, baseUrl, targetId);
+        nextValue = rewriteStyleAttribute(rawValue, baseUrl, targetId, options);
       }
 
       return ` ${rawName}=${quote}${htmlEscapeAttribute(nextValue)}${quote}`;
