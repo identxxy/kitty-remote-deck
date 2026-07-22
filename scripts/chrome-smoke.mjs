@@ -1322,6 +1322,30 @@ async function runViewport(client, width, height, label) {
       const topScrollCanceled = !output.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true }));
       await new Promise((resolve) => setTimeout(resolve, WHEEL_SCROLL_DEBOUNCE_MS + 80));
 
+      const makeTouchEvent = (type, y) => {
+        const event = new Event(type, { bubbles: true, cancelable: type === 'touchmove' });
+        Object.defineProperty(event, 'touches', {
+          configurable: true,
+          value: type === 'touchend' || type === 'touchcancel' ? [] : [{ clientY: y }]
+        });
+        return event;
+      };
+
+      const touchCallsBefore = scrollWindowCalls.length;
+      const touchMaxScrollTop = Math.max(0, output.scrollHeight - output.clientHeight);
+      output.scrollTop = touchMaxScrollTop;
+      output.dispatchEvent(makeTouchEvent('touchstart', 300));
+      const bottomTouchCanceled = !output.dispatchEvent(makeTouchEvent('touchmove', 180));
+      output.dispatchEvent(makeTouchEvent('touchend', 180));
+      await new Promise((resolve) => setTimeout(resolve, WHEEL_SCROLL_DEBOUNCE_MS + 80));
+
+      output.scrollTop = 0;
+      output.dispatchEvent(makeTouchEvent('touchstart', 180));
+      const topTouchCanceled = !output.dispatchEvent(makeTouchEvent('touchmove', 300));
+      output.dispatchEvent(makeTouchEvent('touchend', 300));
+      await new Promise((resolve) => setTimeout(resolve, WHEEL_SCROLL_DEBOUNCE_MS + 80));
+      const touchScrollCalls = scrollWindowCalls.slice(touchCallsBefore);
+
       state.selectedWindowId = null;
       output.scrollTop = 0;
       const noPaneBoundaryCanceled = !output.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true }));
@@ -1351,6 +1375,9 @@ async function runViewport(client, width, height, label) {
         midScrollCanceled,
         bottomScrollCanceled,
         topScrollCanceled,
+        bottomTouchCanceled,
+        topTouchCanceled,
+        touchScrollCalls,
         noPaneBoundaryCanceled,
         noPaneStatus,
         scrollWindowCalls
@@ -1586,6 +1613,11 @@ async function runViewport(client, width, height, label) {
     metrics.screenModeWheelEdges.midScrollCanceled !== false ||
     metrics.screenModeWheelEdges.bottomScrollCanceled !== true ||
     metrics.screenModeWheelEdges.topScrollCanceled !== true ||
+    metrics.screenModeWheelEdges.bottomTouchCanceled !== true ||
+    metrics.screenModeWheelEdges.topTouchCanceled !== true ||
+    metrics.screenModeWheelEdges.touchScrollCalls.length < 2 ||
+    metrics.screenModeWheelEdges.touchScrollCalls[0].lines <= 0 ||
+    metrics.screenModeWheelEdges.touchScrollCalls[1].lines >= 0 ||
     metrics.screenModeWheelEdges.noPaneBoundaryCanceled !== true ||
     !metrics.screenModeWheelEdges.noPaneStatus.includes("Select a pane first") ||
     metrics.screenModeWheelEdges.scrollWindowCalls.length < 2 ||

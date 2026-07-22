@@ -15,6 +15,8 @@ const SESSION_TREE_REFRESH_EVERY_TICKS = 3;
 const ALL_TEXT_AUTO_REFRESH_EVERY_TICKS = 3;
 const WHEEL_SCROLL_DEBOUNCE_MS = 70;
 const WHEEL_SCROLL_MAX_LINES = 80;
+const TOUCH_SCROLL_LINE_PX = 42;
+const TOUCH_SCROLL_SENSITIVITY = 5;
 const LOCAL_SCROLL_BOUNDARY_EPSILON = 2;
 const MOBILE_AUTO_CONNECT_DELAY_MS = 1000;
 const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
@@ -180,6 +182,7 @@ let resizeSession = null;
 let pendingScrollLines = 0;
 let scrollFlushTimer = null;
 let remoteScrollInFlight = false;
+let screenTouchScroll = null;
 let screenRequestSerial = 0;
 let sessionRequestSerial = 0;
 let autoRefreshTick = 0;
@@ -1013,8 +1016,7 @@ function getScreenOutputScrollBoundary() {
   };
 }
 
-function shouldForwardWheelToKitty(event) {
-  const deltaY = event.deltaY || 0;
+function shouldForwardScrollDeltaToKitty(deltaY) {
   if (!deltaY) {
     return false;
   }
@@ -1025,6 +1027,10 @@ function shouldForwardWheelToKitty(event) {
   }
 
   return deltaY < 0 ? boundary.atTop : boundary.atBottom;
+}
+
+function shouldForwardWheelToKitty(event) {
+  return shouldForwardScrollDeltaToKitty(event.deltaY || 0);
 }
 
 function renderScreenText(text, options = {}) {
@@ -2213,6 +2219,22 @@ function wheelDeltaToLines(event) {
   return event.deltaY / 42;
 }
 
+function queueRemoteScrollLines(lines) {
+  if (!state.selectedTargetId || !state.selectedWindowId) {
+    setStatus("Select a pane first.", "warning");
+    return false;
+  }
+
+  pendingScrollLines += lines;
+
+  if (scrollFlushTimer) {
+    clearTimeout(scrollFlushTimer);
+  }
+
+  scrollFlushTimer = setTimeout(flushRemoteScroll, WHEEL_SCROLL_DEBOUNCE_MS);
+  return true;
+}
+
 function queueRemoteScrollFromWheel(event) {
   if (state.screenExtent !== "screen") {
     return;
@@ -2225,18 +2247,40 @@ function queueRemoteScrollFromWheel(event) {
   event.preventDefault();
   event.stopImmediatePropagation();
 
-  if (!state.selectedTargetId || !state.selectedWindowId) {
-    setStatus("Select a pane first.", "warning");
+  queueRemoteScrollLines(wheelDeltaToLines(event));
+}
+
+function handleScreenTouchStart(event) {
+  if (event.touches.length !== 1) {
+    screenTouchScroll = null;
     return;
   }
 
-  pendingScrollLines += wheelDeltaToLines(event);
+  screenTouchScroll = {
+    lastY: event.touches[0].clientY
+  };
+}
 
-  if (scrollFlushTimer) {
-    clearTimeout(scrollFlushTimer);
+function handleScreenTouchMove(event) {
+  if (state.screenExtent !== "screen" || !screenTouchScroll || event.touches.length !== 1) {
+    return;
   }
 
-  scrollFlushTimer = setTimeout(flushRemoteScroll, WHEEL_SCROLL_DEBOUNCE_MS);
+  const nextY = event.touches[0].clientY;
+  const deltaY = screenTouchScroll.lastY - nextY;
+  screenTouchScroll.lastY = nextY;
+
+  if (!shouldForwardScrollDeltaToKitty(deltaY)) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  queueRemoteScrollLines((deltaY / TOUCH_SCROLL_LINE_PX) * TOUCH_SCROLL_SENSITIVITY);
+}
+
+function handleScreenTouchEnd() {
+  screenTouchScroll = null;
 }
 
 async function flushRemoteScroll() {
@@ -2885,6 +2929,10 @@ function attachEvents() {
   });
 
   elements.screenOutput.addEventListener("wheel", queueRemoteScrollFromWheel, { passive: false });
+  elements.screenOutput.addEventListener("touchstart", handleScreenTouchStart, { passive: true });
+  elements.screenOutput.addEventListener("touchmove", handleScreenTouchMove, { passive: false });
+  elements.screenOutput.addEventListener("touchend", handleScreenTouchEnd, { passive: true });
+  elements.screenOutput.addEventListener("touchcancel", handleScreenTouchEnd, { passive: true });
   elements.screenOutput.addEventListener("scroll", handleScreenOutputScroll, { passive: true });
   elements.screenOutput.addEventListener("click", async (event) => {
     const link = event.target.closest?.("[data-preview-url]");
