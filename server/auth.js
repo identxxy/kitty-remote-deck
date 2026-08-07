@@ -6,7 +6,6 @@ const path = require("path");
 const SESSION_COOKIE_NAME = "krd_session";
 const TOKEN_PREFIX = "krd_";
 const DEFAULT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const DEFAULT_MAX_SESSIONS_PER_DEVICE = 16;
 const SCRYPT_KEY_LENGTH = 32;
 
 function nowIso() {
@@ -57,21 +56,26 @@ function normalizeStore(store) {
 }
 
 function normalizeDevice(device) {
-  const sessions = Array.isArray(device?.activeSessions)
+  const storedSessions = Array.isArray(device?.activeSessions)
     ? device.activeSessions.filter((session) => session?.hash && session?.expiresAt)
     : [];
 
-  if (!sessions.length && device?.activeSessionHash && device?.activeSessionExpiresAt) {
-    sessions.push({
+  if (!storedSessions.length && device?.activeSessionHash && device?.activeSessionExpiresAt) {
+    storedSessions.push({
       hash: device.activeSessionHash,
       createdAt: device.activeSessionCreatedAt || "",
       expiresAt: device.activeSessionExpiresAt
     });
   }
 
+  const activeSession = storedSessions[storedSessions.length - 1] || null;
+
   return {
     ...(device || {}),
-    activeSessions: sessions
+    activeSessions: activeSession ? [activeSession] : [],
+    activeSessionHash: activeSession?.hash || "",
+    activeSessionCreatedAt: activeSession?.createdAt || "",
+    activeSessionExpiresAt: activeSession?.expiresAt || ""
   };
 }
 
@@ -99,7 +103,14 @@ function createAuthManager(authFile) {
       const nextStore = normalizeStore(store);
       nextStore.updatedAt = nowIso();
       await fsp.mkdir(path.dirname(authFile), { recursive: true });
-      await fsp.writeFile(authFile, JSON.stringify(nextStore, null, 2), { mode: 0o600 });
+      const temporaryFile = `${authFile}.${process.pid}.${randomBase64Url(6)}.tmp`;
+
+      try {
+        await fsp.writeFile(temporaryFile, JSON.stringify(nextStore, null, 2), { mode: 0o600 });
+        await fsp.rename(temporaryFile, authFile);
+      } finally {
+        await fsp.rm(temporaryFile, { force: true });
+      }
     }
   };
 }
@@ -135,16 +146,6 @@ function getSessionTtlMs() {
   return DEFAULT_SESSION_TTL_MS;
 }
 
-function getMaxSessionsPerDevice() {
-  const count = Number(process.env.KRD_MAX_SESSIONS_PER_DEVICE || "");
-
-  if (Number.isInteger(count) && count > 0) {
-    return count;
-  }
-
-  return DEFAULT_MAX_SESSIONS_PER_DEVICE;
-}
-
 function getActiveSessions(device) {
   return Array.isArray(device?.activeSessions)
     ? device.activeSessions.filter((session) => session?.hash && session?.expiresAt)
@@ -170,12 +171,8 @@ function pruneExpiredSessions(device, now = Date.now()) {
   return after.length !== before.length;
 }
 
-function addActiveSession(device, session) {
-  pruneExpiredSessions(device);
-  const sessions = getActiveSessions(device);
-  sessions.push(session);
-  const cappedSessions = sessions.slice(-getMaxSessionsPerDevice());
-  device.activeSessions = cappedSessions;
+function setActiveSession(device, session) {
+  device.activeSessions = [session];
   device.activeSessionHash = session.hash;
   device.activeSessionCreatedAt = session.createdAt;
   device.activeSessionExpiresAt = session.expiresAt;
@@ -294,7 +291,7 @@ async function verifyDeviceToken(manager, token) {
   const expiresAt = new Date(Date.now() + getSessionTtlMs()).toISOString();
 
   device.lastLoginAt = createdAt;
-  addActiveSession(device, {
+  setActiveSession(device, {
     hash: hashSessionSecret(secret),
     createdAt,
     expiresAt

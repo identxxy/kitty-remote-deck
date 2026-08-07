@@ -516,19 +516,74 @@ async function runMobileChatViewport(client, width, height, label) {
       cancelMobileAutoConnect({ suppress: true });
       setMobileScreen('connect', { history: 'replace' });
 
+      const originalPaneApiFetch = apiFetch;
+      const paneRequests = new Map();
+      apiFetch = async (url, options = {}) => {
+        const href = String(url);
+        if (!href.startsWith('/api/screen?')) {
+          return originalPaneApiFetch(url, options);
+        }
+
+        const windowId = Number(new URL(href, location.href).searchParams.get('windowId'));
+        return new Promise((resolve) => {
+          const request = {
+            aborted: Boolean(options.signal?.aborted),
+            resolve
+          };
+          options.signal?.addEventListener('abort', () => {
+            request.aborted = true;
+          }, { once: true });
+          paneRequests.set(windowId, request);
+        });
+      };
+      state.selectedTargetId = 'local';
+      state.selectedSocket = '/tmp/kitty-smoke.sock';
+      state.selectedWindowId = 1234;
+      setMobileScreen('chat', { history: 'replace' });
+      renderScreenText('pane A content');
+      const paneARefresh = refreshScreen({ force: true });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const paneBSwitch = selectWindow(2345);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const paneSwitchLoading = {
+        selectedWindowId: state.selectedWindowId,
+        text: document.querySelector('#screenOutput').textContent,
+        windowId: document.querySelector('#screenOutput').dataset.paneId,
+        busy: document.querySelector('#screenOutput').getAttribute('aria-busy'),
+        oldRequestAborted: paneRequests.get(1234)?.aborted || false
+      };
+      paneRequests.get(2345)?.resolve({ text: 'pane B content' });
+      await paneBSwitch;
+      paneRequests.get(1234)?.resolve({ text: 'stale pane A response' });
+      await paneARefresh;
+      const paneSwitchFinal = {
+        selectedWindowId: state.selectedWindowId,
+        text: document.querySelector('#screenOutput').textContent,
+        windowId: document.querySelector('#screenOutput').dataset.paneId,
+        busy: document.querySelector('#screenOutput').getAttribute('aria-busy')
+      };
+      apiFetch = originalPaneApiFetch;
+
       const originalApiFetch = apiFetch;
       const originalRefreshScreen = refreshScreen;
       const composerCalls = [];
       let imageSendRelease = null;
+      let textSendRelease = null;
       apiFetch = async (url, options = {}) => {
         if (url === '/api/send-text' || url === '/api/send-key' || url === '/api/send-image') {
+          const body = options.body ? JSON.parse(options.body) : {};
           composerCalls.push({
             url,
-            body: options.body ? JSON.parse(options.body) : {}
+            body
           });
           if (url === '/api/send-image') {
             return new Promise((resolve) => {
               imageSendRelease = () => resolve({ ok: true, image: { fileUrl: 'file:///tmp/smoke.png' } });
+            });
+          }
+          if (url === '/api/send-text' && body.text === 'dedupe me') {
+            return new Promise((resolve) => {
+              textSendRelease = () => resolve({ ok: true, data: {} });
             });
           }
           return { ok: true, data: {} };
@@ -564,6 +619,25 @@ async function runMobileChatViewport(client, width, height, label) {
         valueAfter: composer.value
       };
 
+      const rapidEnterCallStart = composerCalls.length;
+      composer.value = 'dedupe me';
+      const firstRapidEnter = sendComposerShortcut();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const secondRapidEnter = sendComposerShortcut();
+      const rapidEnterDuringSend = {
+        calls: composerCalls.slice(rapidEnterCallStart),
+        busy: state.composerSending,
+        inputReadOnly: composer.readOnly
+      };
+      textSendRelease?.();
+      await Promise.all([firstRapidEnter, secondRapidEnter]);
+      const rapidEnterComposer = {
+        ...rapidEnterDuringSend,
+        valueAfter: composer.value,
+        busyAfter: state.composerSending,
+        inputReadOnlyAfter: composer.readOnly
+      };
+
       document.querySelector('#specialKeyMenuBtn').click();
       const specialKeyMenuRect = document.querySelector('#specialKeyMenuPopover').getBoundingClientRect();
       const specialKeyMenuHit = document.elementFromPoint(
@@ -585,7 +659,12 @@ async function runMobileChatViewport(client, width, height, label) {
       document.querySelector('[data-special-key-id="tab"]').click();
       await new Promise((resolve) => setTimeout(resolve, 0));
       const specialKeyComposer = {
-        calls: composerCalls.slice(multilineComposer.calls.length + newlineOnlyComposer.calls.length + emptyComposer.calls.length),
+        calls: composerCalls.slice(
+          multilineComposer.calls.length +
+          newlineOnlyComposer.calls.length +
+          emptyComposer.calls.length +
+          rapidEnterComposer.calls.length
+        ),
         menuHiddenAfterClick: document.querySelector('#specialKeyMenuPopover').hidden,
         menuGeometry: specialKeyMenuGeometry,
         menuLabels: Array.from(document.querySelectorAll('#specialKeyMenuPopover [data-special-key-id]')).map((button) => button.textContent.trim())
@@ -626,7 +705,13 @@ async function runMobileChatViewport(client, width, height, label) {
       imageSendRelease?.();
       await imageSendPromise;
       const imageComposer = {
-        calls: composerCalls.slice(multilineComposer.calls.length + newlineOnlyComposer.calls.length + emptyComposer.calls.length + specialKeyComposer.calls.length),
+        calls: composerCalls.slice(
+          multilineComposer.calls.length +
+          newlineOnlyComposer.calls.length +
+          emptyComposer.calls.length +
+          rapidEnterComposer.calls.length +
+          specialKeyComposer.calls.length
+        ),
         beforeSend: imageBeforeSend,
         duringSend: imageDuringSend,
         valueAfter: composer.value,
@@ -665,10 +750,15 @@ async function runMobileChatViewport(client, width, height, label) {
         afterConnectBack,
         autoConnectInitial,
         autoConnectAfterBack,
+        paneSwitch: {
+          loading: paneSwitchLoading,
+          final: paneSwitchFinal
+        },
         composerEnter: {
           multiline: multilineComposer,
           newlineOnly: newlineOnlyComposer,
           empty: emptyComposer,
+          rapid: rapidEnterComposer,
           specialKey: specialKeyComposer,
           image: imageComposer
         }
@@ -904,6 +994,15 @@ async function runMobileChatViewport(client, width, height, label) {
     mobileFlow.autoConnectInitial.mobileScreen !== "sessions" ||
     mobileFlow.autoConnectAfterBack.calls.join(",") !== "auto" ||
     mobileFlow.autoConnectAfterBack.mobileScreen !== "connect" ||
+    mobileFlow.paneSwitch.loading.selectedWindowId !== 2345 ||
+    mobileFlow.paneSwitch.loading.text !== "Loading pane #2345..." ||
+    mobileFlow.paneSwitch.loading.windowId !== "2345" ||
+    mobileFlow.paneSwitch.loading.busy !== "true" ||
+    mobileFlow.paneSwitch.loading.oldRequestAborted !== true ||
+    mobileFlow.paneSwitch.final.selectedWindowId !== 2345 ||
+    mobileFlow.paneSwitch.final.text !== "pane B content" ||
+    mobileFlow.paneSwitch.final.windowId !== "2345" ||
+    mobileFlow.paneSwitch.final.busy !== "false" ||
     mobileFlow.composerEnter.multiline.calls.length !== 1 ||
     mobileFlow.composerEnter.multiline.calls[0].url !== "/api/send-text" ||
     mobileFlow.composerEnter.multiline.calls[0].body.text !== "line 1\nline 2" ||
@@ -917,6 +1016,14 @@ async function runMobileChatViewport(client, width, height, label) {
     mobileFlow.composerEnter.empty.calls.length !== 1 ||
     mobileFlow.composerEnter.empty.calls[0].url !== "/api/send-key" ||
     mobileFlow.composerEnter.empty.calls[0].body.key !== "enter" ||
+    mobileFlow.composerEnter.rapid.calls.length !== 1 ||
+    mobileFlow.composerEnter.rapid.calls[0].url !== "/api/send-text" ||
+    mobileFlow.composerEnter.rapid.calls[0].body.text !== "dedupe me" ||
+    mobileFlow.composerEnter.rapid.busy !== true ||
+    mobileFlow.composerEnter.rapid.inputReadOnly !== true ||
+    mobileFlow.composerEnter.rapid.valueAfter !== "" ||
+    mobileFlow.composerEnter.rapid.busyAfter !== false ||
+    mobileFlow.composerEnter.rapid.inputReadOnlyAfter !== false ||
     mobileFlow.composerEnter.specialKey.calls.length !== 1 ||
     mobileFlow.composerEnter.specialKey.calls[0].url !== "/api/send-key" ||
     mobileFlow.composerEnter.specialKey.calls[0].body.key !== "tab" ||
@@ -1159,6 +1266,7 @@ async function runViewport(client, width, height, label) {
       state.flatWindows = previousFlatWindows;
       state.selectedWindowId = previousWindowId;
       renderMobilePaneSwitcher();
+      renderScreenText('open https://example.com/report.html and file:///tmp/krd-report.html.');
       return result;
     })()`
   );

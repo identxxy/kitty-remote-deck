@@ -1,6 +1,6 @@
 const STORAGE_KEY = "kitty-remote-deck-ui";
 const DEBUG_STORAGE_KEY = "kitty-remote-deck-debug";
-const CLIENT_BUILD = "0.2.0";
+const CLIENT_BUILD = "0.2.1";
 const MOBILE_HISTORY_KEY = "krdMobileScreen";
 const FONT_SIZE_RANGE = { min: 5, max: 18, default: 13 };
 const THEME_SET = new Set(["dark", "graphite", "light"]);
@@ -184,6 +184,7 @@ let scrollFlushTimer = null;
 let remoteScrollInFlight = false;
 let screenTouchScroll = null;
 let screenRequestSerial = 0;
+let screenAbortController = null;
 let sessionRequestSerial = 0;
 let autoRefreshTick = 0;
 let sessionPointerStart = null;
@@ -204,8 +205,28 @@ function getEditingTarget() {
   return state.targets.find((target) => target.id === state.editingTargetId) || null;
 }
 
+function captureSelectedPane() {
+  return {
+    targetId: state.selectedTargetId,
+    socket: state.selectedSocket,
+    windowId: state.selectedWindowId
+  };
+}
+
+function isPaneStillSelected(pane) {
+  return (
+    pane.targetId === state.selectedTargetId &&
+    pane.socket === state.selectedSocket &&
+    Number(pane.windowId) === Number(state.selectedWindowId)
+  );
+}
+
 function invalidateScreenRequests() {
   screenRequestSerial += 1;
+  if (screenAbortController) {
+    screenAbortController.abort();
+    screenAbortController = null;
+  }
   state.refreshing = false;
 }
 
@@ -1039,10 +1060,12 @@ function renderScreenText(text, options = {}) {
   const wasNearBottom = isScreenOutputNearBottom();
   const nextText = text || "";
 
-  if (state.screenText !== nextText) {
+  if (state.screenText !== nextText || output.getAttribute("aria-busy") === "true") {
     state.screenText = nextText;
     output.innerHTML = renderTerminalText(state.screenText || "(current screen is empty)");
   }
+  output.setAttribute("aria-busy", "false");
+  output.dataset.paneId = String(state.selectedWindowId || "");
 
   if (state.screenExtent === "all") {
     if (options.scrollToBottom || state.allTextFollowTail || wasNearBottom) {
@@ -1061,6 +1084,14 @@ function renderScreenText(text, options = {}) {
   } else {
     setScreenOutputScrollTop(previousTop);
   }
+}
+
+function renderPaneLoading(windowId) {
+  state.screenText = "";
+  elements.screenOutput.textContent = `Loading pane #${windowId}...`;
+  elements.screenOutput.setAttribute("aria-busy", "true");
+  elements.screenOutput.dataset.paneId = String(windowId || "");
+  elements.screenOutput.scrollTop = 0;
 }
 
 function handleScreenOutputScroll() {
@@ -1195,6 +1226,7 @@ function setComposerBusy(isBusy) {
   elements.attachImageBtn.disabled = state.composerSending;
   elements.removeImageBtn.disabled = state.composerSending;
   elements.imageInput.disabled = state.composerSending;
+  elements.sendTextInput.readOnly = state.composerSending;
   elements.sendTextBtn.textContent = state.composerSending ? "Sending" : "Send";
   if (state.composerSending) {
     closeSpecialKeyMenu();
@@ -1545,13 +1577,18 @@ async function createKittyPanel(kind, context = {}) {
 }
 
 async function selectWindow(windowId) {
-  state.selectedWindowId = Number(windowId);
+  const nextWindowId = Number(windowId);
+  const selectionChanged = Number(state.selectedWindowId) !== nextWindowId;
+  state.selectedWindowId = nextWindowId;
   if (isMobileViewport()) {
     state.previewVisible = false;
     state.previewPinned = false;
     setMobileScreen("chat");
   }
   invalidateScreenRequests();
+  if (selectionChanged) {
+    renderPaneLoading(nextWindowId);
+  }
   renderSessions();
   renderMobilePaneSwitcher();
   renderViewerMeta();
@@ -2133,6 +2170,9 @@ async function loadSessions(options = {}) {
   const selectedWindowChanged = Number(previousWindowId) !== Number(state.selectedWindowId);
   if (selectedWindowChanged) {
     invalidateScreenRequests();
+    if (state.selectedWindowId && !deferPaneRefresh) {
+      renderPaneLoading(state.selectedWindowId);
+    }
   }
 
   renderSessions();
@@ -2177,6 +2217,11 @@ async function refreshScreen(options = {}) {
   const capturedSocket = state.selectedSocket;
   const capturedWindowId = state.selectedWindowId;
   const capturedExtent = state.screenExtent;
+  if (screenAbortController) {
+    screenAbortController.abort();
+  }
+  const requestController = new AbortController();
+  screenAbortController = requestController;
   state.refreshing = true;
 
   try {
@@ -2190,7 +2235,9 @@ async function refreshScreen(options = {}) {
       query.set("socket", capturedSocket);
     }
 
-    const data = await apiFetch(`/api/screen?${query.toString()}`);
+    const data = await apiFetch(`/api/screen?${query.toString()}`, {
+      signal: requestController.signal
+    });
     if (
       requestSerial === screenRequestSerial &&
       capturedTargetId === state.selectedTargetId &&
@@ -2200,9 +2247,29 @@ async function refreshScreen(options = {}) {
     ) {
       renderScreenText(data.text || "", options);
     }
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      return;
+    }
+
+    if (
+      requestSerial === screenRequestSerial &&
+      capturedTargetId === state.selectedTargetId &&
+      capturedSocket === state.selectedSocket &&
+      Number(capturedWindowId) === Number(state.selectedWindowId)
+    ) {
+      state.screenText = "";
+      elements.screenOutput.textContent = `Pane #${capturedWindowId} could not be loaded. Click Refresh to try again.`;
+      elements.screenOutput.setAttribute("aria-busy", "false");
+      elements.screenOutput.dataset.paneId = String(capturedWindowId);
+    }
+    throw error;
   } finally {
     if (requestSerial === screenRequestSerial) {
       state.refreshing = false;
+      if (screenAbortController === requestController) {
+        screenAbortController = null;
+      }
     }
   }
 }
@@ -2358,13 +2425,15 @@ async function sendText(options = {}) {
     return false;
   }
 
+  const pane = captureSelectedPane();
+
   await apiFetch("/api/send-text", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      targetId: state.selectedTargetId,
-      socket: state.selectedSocket,
-      windowId: state.selectedWindowId,
+      targetId: pane.targetId,
+      socket: pane.socket,
+      windowId: pane.windowId,
       text,
       appendNewline: Boolean(options.appendNewline)
     })
@@ -2372,12 +2441,14 @@ async function sendText(options = {}) {
 
   setStatus(
     options.appendNewline
-      ? `Text sent to pane #${state.selectedWindowId} and submitted.`
-      : `Text sent to pane #${state.selectedWindowId}.`,
+      ? `Text sent to pane #${pane.windowId} and submitted.`
+      : `Text sent to pane #${pane.windowId}.`,
     "success"
   );
   elements.sendTextInput.value = "";
-  await refreshScreen({ scrollToBottom: true });
+  if (isPaneStillSelected(pane)) {
+    await refreshScreen({ scrollToBottom: true });
+  }
   return true;
 }
 
@@ -2394,14 +2465,15 @@ async function sendImageAttachment(options = {}) {
   }
 
   const text = elements.sendTextInput.value;
+  const pane = captureSelectedPane();
   setStatus(`Uploading and sending ${attachment.name}...`, "neutral");
   const data = await apiFetch("/api/send-image", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      targetId: state.selectedTargetId,
-      socket: state.selectedSocket,
-      windowId: state.selectedWindowId,
+      targetId: pane.targetId,
+      socket: pane.socket,
+      windowId: pane.windowId,
       text,
       imageBase64: attachment.base64,
       fileName: attachment.name,
@@ -2418,11 +2490,23 @@ async function sendImageAttachment(options = {}) {
   );
   elements.sendTextInput.value = "";
   clearImageAttachment();
-  await refreshScreen({ scrollToBottom: true });
+  if (isPaneStillSelected(pane)) {
+    await refreshScreen({ scrollToBottom: true });
+  }
   return data;
 }
 
 async function sendComposerPayload(options = {}) {
+  return runComposerAction(async () => {
+    if (state.imageAttachment) {
+      return sendImageAttachment(options);
+    }
+
+    return sendText(options);
+  });
+}
+
+async function runComposerAction(action) {
   if (state.composerSending) {
     setStatus("Previous input is still sending. Please wait.", "neutral");
     return false;
@@ -2430,14 +2514,14 @@ async function sendComposerPayload(options = {}) {
 
   setComposerBusy(true);
   try {
-    if (state.imageAttachment) {
-      return await sendImageAttachment(options);
-    }
-
-    return await sendText(options);
+    return await action();
   } finally {
     setComposerBusy(false);
   }
+}
+
+async function sendComposerKey(key) {
+  return runComposerAction(() => sendKey(key));
 }
 
 async function sendKey(key) {
@@ -2446,19 +2530,22 @@ async function sendKey(key) {
     return;
   }
 
+  const pane = captureSelectedPane();
   await apiFetch("/api/send-key", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      targetId: state.selectedTargetId,
-      socket: state.selectedSocket,
-      windowId: state.selectedWindowId,
+      targetId: pane.targetId,
+      socket: pane.socket,
+      windowId: pane.windowId,
       key
     })
   });
 
-  setStatus(`Sent key ${key} to pane #${state.selectedWindowId}.`, "success");
-  await refreshScreen({ scrollToBottom: true });
+  setStatus(`Sent key ${key} to pane #${pane.windowId}.`, "success");
+  if (isPaneStillSelected(pane)) {
+    await refreshScreen({ scrollToBottom: true });
+  }
 }
 
 async function focusWindow() {
@@ -2481,28 +2568,23 @@ async function focusWindow() {
 }
 
 async function sendComposerShortcut() {
-  if (state.composerSending) {
-    setStatus("Previous input is still sending. Please wait.", "neutral");
-    return;
-  }
-
   const action = COMPOSER_UTILS.getEnterAction(elements.sendTextInput.value, {
     hasImage: Boolean(state.imageAttachment)
   });
 
   if (action.type === "send-composer") {
-    await sendComposerPayload({ appendNewline: action.appendNewline });
-    return;
+    return sendComposerPayload({ appendNewline: action.appendNewline });
   }
 
   if (action.type === "send-text") {
-    await sendText({ appendNewline: action.appendNewline });
-    return;
+    return runComposerAction(() => sendText({ appendNewline: action.appendNewline }));
   }
 
   if (action.type === "send-key") {
-    await sendKey(action.key);
+    return sendComposerKey(action.key);
   }
+
+  return false;
 }
 
 async function setScreenExtent(extent) {
@@ -2997,7 +3079,7 @@ function attachEvents() {
 
   elements.sendEnterBtn.addEventListener("click", async () => {
     try {
-      await sendKey("enter");
+      await sendComposerKey("enter");
     } catch (error) {
       setStatus(error.message, "danger");
     }
@@ -3021,7 +3103,7 @@ function attachEvents() {
 
     try {
       closeSpecialKeyMenu();
-      await sendKey(item.key);
+      await sendComposerKey(item.key);
     } catch (error) {
       setStatus(error.message, "danger");
     }

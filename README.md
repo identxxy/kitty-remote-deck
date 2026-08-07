@@ -2,7 +2,7 @@
 
 A local web app for browsing and controlling GUI `kitty` sessions on the same machine or over SSH.
 
-Current release: `v0.2.0`.
+Current release: `v0.2.1`.
 
 ## What It Does
 
@@ -52,7 +52,7 @@ All target/session/control APIs require a device session. Create one token per d
 node scripts/auth-admin.js create-device "iPhone"
 ```
 
-The raw token is shown once. The server stores only a salted hash in `data/auth.json`, which is ignored by Git. One token represents one device; the same token may keep multiple active browser sessions so normal tabs, mobile views, and desktop-mode tabs on the same phone do not kick each other out.
+The raw token is shown once. The server stores only a salted hash in `data/auth.json`, which is ignored by Git. One token represents one device and permits one active browser session. Signing in with the same token from another browser or origin immediately replaces the previous session. Tabs under the same browser origin share the current session cookie.
 
 Useful local admin commands:
 
@@ -88,6 +88,7 @@ Edit the target in the Connect sidebar if your kitty binary or socket pattern di
 - `Enter` in the composer sends text and a final terminal `Enter` when the textbox has content, including whitespace or newline-only content.
 - `Enter` in an empty composer sends `Enter` to the selected pane.
 - `Shift+Enter`, or a mobile keyboard action that inserts a newline, keeps that newline in the composer.
+- While a composer action is in flight, repeated Enter presses and key-button taps are ignored and the input remains read-only until the request finishes.
 - The Image button, paste, or drag/drop can attach one image to the composer. Sending saves it on the active target and sends a Markdown image reference such as `![name](file:///target/path)` to the selected pane.
 - Images are stored on the active target host, not in the browser. The default path is `~/Pictures/voxpress/YYYYMMDD/YYYYMMDDHHMMSS-random-name.ext`; Local targets use the server machine, and SSH targets use the remote SSH user's home directory. Set `KRD_IMAGE_UPLOAD_DIR=/path/to/dir` before starting the server to override the root directory for target-side uploads.
 - Image uploads are not cleaned automatically. Treat `~/Pictures/voxpress/` as a user-visible inbox for files sent into KT sessions.
@@ -100,6 +101,7 @@ Edit the target in the Connect sidebar if your kitty binary or socket pattern di
 - When the Browser is not pinned, clicking or focusing elsewhere in the workbench hides it. Pinning keeps it open as a real right-side column that compresses the editor and Input Console instead of overlaying them.
 - On mobile-width screens, the UI becomes a chat-style flow: Connect screen, full-screen Session list, then a full-screen pane conversation with a back button.
 - Mobile pane conversations keep the input composer visible at the bottom. Fit mode wraps terminal text to the phone width; Wide mode preserves terminal columns and allows horizontal scrolling.
+- Switching panes clears the previous pane text immediately, identifies the pane being loaded, cancels the previous screen request, and ignores any late response from the old pane.
 - On mobile, terminal URL clicks open the Browser as a full-screen overlay. Use `‹ KT Panel` or the system Back action to return to the pane, or the floating Browser tab to reopen the last preview.
 - The `Keys` menu sends lower-frequency terminal keys, including `Esc`, `Tab`, `Ctrl+A/E/K/L/U/W`, `Ctrl+C`, `Ctrl+D`, arrows, `Home`, and `End`.
 
@@ -165,7 +167,7 @@ The project uses semantic versioning. The current release is recorded in:
 - `VERSION`
 - `CHANGELOG.md`
 
-Git release tags use the `vMAJOR.MINOR.PATCH` format, for example `v0.2.0`.
+Git release tags use the `vMAJOR.MINOR.PATCH` format, for example `v0.2.1`.
 
 ## Sync to a Remote Playground
 

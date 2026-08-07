@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.2.1 - Session Reliability
+
+- Restored single-active-session enforcement for device tokens: a new login now invalidates every previous session for that token.
+- Prevented rapid Enter presses and key-button taps from submitting duplicate composer actions while a send is in flight.
+- Made pane switching clear stale content immediately, cancel the previous pane request, and ignore late responses from the old pane.
+
 ## v0.2.0 - Kitty Surface Management
 
 - Added a mobile chat-style flow: Connect screen, full-screen Session list, full-screen pane conversation, visible bottom composer, and Fit/Wide terminal text modes.

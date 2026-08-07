@@ -38,7 +38,7 @@ test("device tokens are stored as hashes and verify by raw token", async () => {
   });
 });
 
-test("a device token can keep multiple active browser sessions", async () => {
+test("a device token keeps only the newest browser session active", async () => {
   await withAuthManager(async (manager) => {
     const created = await createDeviceToken(manager, "iPad");
 
@@ -46,11 +46,27 @@ test("a device token can keep multiple active browser sessions", async () => {
     const second = await verifyDeviceToken(manager, created.token);
 
     assert.notEqual(first.sessionCookie, second.sessionCookie);
-    assert.equal((await authenticateSession(manager, first.sessionCookie)).device.label, "iPad");
+    assert.equal(await authenticateSession(manager, first.sessionCookie), null);
 
     const authenticated = await authenticateSession(manager, second.sessionCookie);
     assert.equal(authenticated.device.label, "iPad");
-    assert.equal(authenticated.device.activeSessionCount, 2);
+    assert.equal(authenticated.device.activeSessionCount, 1);
+  });
+});
+
+test("concurrent logins leave exactly one browser session active", async () => {
+  await withAuthManager(async (manager) => {
+    const created = await createDeviceToken(manager, "Concurrent device");
+    const logins = await Promise.all([
+      verifyDeviceToken(manager, created.token),
+      verifyDeviceToken(manager, created.token)
+    ]);
+    const authenticated = await Promise.all(
+      logins.map((login) => authenticateSession(manager, login.sessionCookie))
+    );
+
+    assert.equal(authenticated.filter(Boolean).length, 1);
+    assert.equal(authenticated.find(Boolean).device.activeSessionCount, 1);
   });
 });
 
