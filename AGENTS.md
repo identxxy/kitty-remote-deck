@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This project is a local web app for browsing and controlling GUI `kitty` sessions on the same machine or over SSH.
+This project is a local web app for browsing and controlling GUI `kitty` sessions, or headless `tmux` servers, on the same machine or over SSH.
 
 ## Project root
 
@@ -27,7 +27,7 @@ http://localhost:3040
 - `server.js`: local HTTP server and API routes
 - `server/kitty_runner.js`: local/SSH helper invocation wrapper
 - `server/url_proxy.js`: URL proxy rewriting helpers for HTML/CSS resources
-- `server/remote_helper.py`: Python helper used locally or streamed over SSH to run `kitty @` actions and URL resource fetches
+- `server/remote_helper.py`: Python helper used locally or streamed over SSH to run `kitty @` or `tmux` actions and URL resource fetches; `PAYLOAD["backend"]` selects the action set, and the tmux tree is mapped onto kitty's shape (session -> OS window, window -> tab, pane -> window)
 - `public/index.html`: app layout
 - `public/app.js`: UI state, events, font-size preference, session actions, embedded Browser drawer
 - `public/styles.css`: workbench styling
@@ -38,6 +38,7 @@ http://localhost:3040
 1. Start the local server from this directory.
 2. Use the seeded `Local Kitty` target for same-machine kitty, or create an SSH target in Connect.
 3. Local targets call the Python helper directly; SSH targets stream the helper to the target host.
+   Each target also has a `backend` (`kitty` or `tmux`). tmux pane ids start at `%0`, so ids must be checked with `hasSelectedWindow()` / `!== null`, never for truthiness.
 4. `Enter` in the composer:
    - sends text if the textbox has content
    - sends `Enter` if the textbox is empty

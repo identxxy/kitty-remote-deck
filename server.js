@@ -12,7 +12,7 @@ const {
   serializeSessionCookie,
   verifyDeviceToken
 } = require("./server/auth");
-const { normalizeTransport, runKittyAction } = require("./server/kitty_runner");
+const { normalizeBackend, normalizeTransport, runKittyAction } = require("./server/kitty_runner");
 const {
   createProxyUrl,
   isCssContentType,
@@ -20,6 +20,7 @@ const {
   rewriteCssResources,
   rewriteHtmlResources
 } = require("./server/url_proxy");
+const { createEtag, encodeBody, hashText, isFresh } = require("./server/response_encoding");
 const {
   MAX_IMAGE_BYTES,
   createComposerImageText,
@@ -45,12 +46,22 @@ const DEFAULT_TARGET = {
   id: "local",
   name: "Local Kitty",
   transport: "local",
+  backend: "kitty",
   sshTarget: "",
   kittyBinary: "kitty",
+  tmuxBinary: "tmux",
   socketPattern: "/tmp/kitty.sock-*",
   defaultSocket: "",
   notes: "Local GUI kitty session on this machine"
 };
+
+// tmux has no per-viewer viewport, so Screen-mode scrolling keeps an offset per
+// pane here and the helper captures the matching slice of history.
+const tmuxScrollOffsets = new Map();
+
+function scrollOffsetKey(target, socket, windowId) {
+  return `${target.id}|${socket || ""}|${windowId}`;
+}
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -93,13 +104,17 @@ function nowIso() {
 
 function normalizeTarget(input, fallbackId) {
   const transport = normalizeTransport(input.transport || (input.sshTarget ? "ssh" : "local"));
+  const backend = normalizeBackend(input.backend);
   const target = {
     id: String(input.id || fallbackId || createId()).trim(),
     name: String(input.name || "").trim(),
     transport,
+    backend,
     sshTarget: String(input.sshTarget || "").trim(),
     kittyBinary: String(input.kittyBinary || DEFAULT_TARGET.kittyBinary).trim(),
-    socketPattern: String(input.socketPattern || DEFAULT_TARGET.socketPattern).trim(),
+    tmuxBinary: String(input.tmuxBinary || DEFAULT_TARGET.tmuxBinary).trim(),
+    // An empty tmux pattern means the helper derives $TMUX_TMPDIR/tmux-UID/* on the target.
+    socketPattern: String(input.socketPattern || (backend === "tmux" ? "" : DEFAULT_TARGET.socketPattern)).trim(),
     defaultSocket: String(input.defaultSocket || "").trim(),
     notes: String(input.notes || "").trim(),
     createdAt: input.createdAt || undefined,
@@ -171,20 +186,19 @@ async function writeStore(store) {
 }
 
 function sendJson(response, statusCode, payload) {
-  response.writeHead(statusCode, {
-    "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-store"
-  });
-  response.end(JSON.stringify(payload));
+  sendJsonWithHeaders(response, statusCode, payload);
 }
 
 function sendJsonWithHeaders(response, statusCode, payload, headers = {}) {
+  const contentType = "application/json; charset=utf-8";
+  const encoded = encodeBody(response.req, JSON.stringify(payload), contentType);
   response.writeHead(statusCode, {
-    "Content-Type": "application/json; charset=utf-8",
+    "Content-Type": contentType,
     "Cache-Control": "no-store",
+    ...encoded.headers,
     ...headers
   });
-  response.end(JSON.stringify(payload));
+  response.end(encoded.body);
 }
 
 function sendText(response, statusCode, payload, contentType) {
@@ -259,10 +273,11 @@ async function parseRequestBody(request, options = {}) {
   }
 }
 
+// tmux ids start at 0 (%0, @0, $0); kitty ids start at 1.
 function parsePositiveInteger(value, name) {
   const number = Number(value);
-  if (!Number.isInteger(number) || number <= 0) {
-    throw new Error(`${name} must be a positive integer.`);
+  if (!Number.isInteger(number) || number < 0) {
+    throw new Error(`${name} must be a non-negative integer.`);
   }
   return number;
 }
@@ -659,7 +674,29 @@ async function serveLocalFileResource(request, response, target, url, accessToke
   return true;
 }
 
-async function serveStaticFile(requestPath, response) {
+// Static assets revalidate on every load ("no-cache") so updates show up immediately,
+// but an unchanged file costs only a 304 instead of a full download.
+function sendStaticBuffer(request, response, file, contentType) {
+  const etag = createEtag(file);
+  const headers = {
+    "Content-Type": contentType,
+    "Cache-Control": "no-cache",
+    ETag: etag,
+    Vary: "Accept-Encoding"
+  };
+
+  if (isFresh(request, etag)) {
+    response.writeHead(304, headers);
+    response.end();
+    return;
+  }
+
+  const encoded = encodeBody(request, file, contentType);
+  response.writeHead(200, { ...headers, ...encoded.headers });
+  response.end(encoded.body);
+}
+
+async function serveStaticFile(request, requestPath, response) {
   const normalizedPath = requestPath === "/" ? "/index.html" : requestPath;
   const absolutePath = path.join(PUBLIC_DIR, normalizedPath);
 
@@ -671,21 +708,13 @@ async function serveStaticFile(requestPath, response) {
   try {
     const file = await fsp.readFile(absolutePath);
     const ext = path.extname(absolutePath).toLowerCase();
-    response.writeHead(200, {
-      "Content-Type": MIME_TYPES[ext] || "application/octet-stream",
-      "Cache-Control": "no-store"
-    });
-    response.end(file);
+    sendStaticBuffer(request, response, file, MIME_TYPES[ext] || "application/octet-stream");
   } catch (error) {
     const fallback = path.join(PUBLIC_DIR, "index.html");
 
     try {
       const file = await fsp.readFile(fallback);
-      response.writeHead(200, {
-        "Content-Type": MIME_TYPES[".html"],
-        "Cache-Control": "no-store"
-      });
-      response.end(file);
+      sendStaticBuffer(request, response, file, MIME_TYPES[".html"]);
     } catch (fallbackError) {
       sendText(response, 404, "Not found");
     }
@@ -900,18 +929,26 @@ async function handleApi(request, response, requestUrl) {
         targetId: requestUrl.searchParams.get("targetId")
       });
       const windowId = parseWindowId(requestUrl.searchParams.get("windowId"));
+      const socket = requestUrl.searchParams.get("socket") || "";
 
       const data = await runRemoteKittyAction(
         target,
         "get_screen",
         {
-          socket: requestUrl.searchParams.get("socket") || "",
+          socket,
           windowId,
-          extent: requestUrl.searchParams.get("extent") === "all" ? "all" : "screen"
+          extent: requestUrl.searchParams.get("extent") === "all" ? "all" : "screen",
+          scrollOffset: tmuxScrollOffsets.get(scrollOffsetKey(target, socket, windowId)) || 0
         },
         25000
       );
-      sendJson(response, 200, data);
+      // Let pollers skip re-downloading a screen they already have.
+      const hash = hashText(data?.panes ? JSON.stringify(data.panes) : data?.text);
+      if (requestUrl.searchParams.get("since") === hash) {
+        sendJson(response, 200, { unchanged: true, hash });
+        return;
+      }
+      sendJson(response, 200, { ...data, hash });
       return;
     }
 
@@ -981,7 +1018,8 @@ async function handleApi(request, response, requestUrl) {
         {
           socket: body.socket || "",
           windowId,
-          key: String(body.key || "enter")
+          key: String(body.key || "enter"),
+          repeat: Math.max(1, Math.min(Number(body.repeat) || 1, 5))
         },
         25000
       );
@@ -993,7 +1031,9 @@ async function handleApi(request, response, requestUrl) {
       const body = await parseRequestBody(request);
       const target = await resolveTargetFromRequest(body);
       const windowId = parseWindowId(body.windowId);
-      const lines = parseScrollLines(body.lines);
+      const toEnd = body.toEnd === true;
+      const lines = toEnd ? 0 : parseScrollLines(body.lines);
+      const offsetKey = scrollOffsetKey(target, body.socket || "", windowId);
 
       const data = await runRemoteKittyAction(
         target,
@@ -1001,10 +1041,19 @@ async function handleApi(request, response, requestUrl) {
         {
           socket: body.socket || "",
           windowId,
-          lines
+          lines,
+          toEnd,
+          scrollOffset: tmuxScrollOffsets.get(offsetKey) || 0
         },
         25000
       );
+      if (typeof data.scrollOffset === "number") {
+        if (data.scrollOffset > 0) {
+          tmuxScrollOffsets.set(offsetKey, data.scrollOffset);
+        } else {
+          tmuxScrollOffsets.delete(offsetKey);
+        }
+      }
       sendJson(response, 200, data);
       return;
     }
@@ -1020,6 +1069,63 @@ async function handleApi(request, response, requestUrl) {
         {
           socket: body.socket || "",
           windowId
+        },
+        25000
+      );
+      sendJson(response, 200, data);
+      return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/api/toggle-zoom") {
+      const body = await parseRequestBody(request);
+      const target = await resolveTargetFromRequest(body);
+      if (normalizeBackend(target.backend) !== "tmux") {
+        throw new Error("Pane zoom is only supported for tmux targets.");
+      }
+      const data = await runRemoteKittyAction(
+        target,
+        "toggle_zoom",
+        { socket: body.socket || "", windowId: parseWindowId(body.windowId) },
+        25000
+      );
+      sendJson(response, 200, data);
+      return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/api/close-panel") {
+      const body = await parseRequestBody(request);
+      const target = await resolveTargetFromRequest(body);
+      const kind = String(body.kind || "");
+      if (!["session", "tab", "pane"].includes(kind)) {
+        throw new Error("kind must be session, tab, or pane.");
+      }
+      const data = await runRemoteKittyAction(
+        target,
+        "close_panel",
+        { socket: body.socket || "", kind, id: parsePositiveInteger(body.id, "id") },
+        25000
+      );
+      sendJson(response, 200, data);
+      return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/api/resize-window") {
+      const body = await parseRequestBody(request);
+      const target = await resolveTargetFromRequest(body);
+      if (normalizeBackend(target.backend) !== "tmux") {
+        throw new Error("Pane resize is only supported for tmux targets.");
+      }
+      const windowId = parseWindowId(body.windowId);
+
+      const data = await runRemoteKittyAction(
+        target,
+        "resize_window",
+        {
+          socket: body.socket || "",
+          windowId,
+          columns: parsePositiveInteger(body.columns, "columns"),
+          rows: parsePositiveInteger(body.rows, "rows"),
+          force: body.force === true
         },
         25000
       );
@@ -1069,7 +1175,7 @@ async function bootstrap() {
       return;
     }
 
-    await serveStaticFile(requestUrl.pathname, response);
+    await serveStaticFile(request, requestUrl.pathname, response);
   });
 
   server.listen(PORT, HOST, () => {

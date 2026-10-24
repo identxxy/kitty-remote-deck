@@ -20,7 +20,7 @@ test("image upload helpers sanitize names and create markdown references", () =>
   assert.equal(sanitizeFilename("../my plot [draft].png"), "my-plot-draft.png");
   assert.equal(
     createMarkdownImageReference("my plot [draft].png", "file:///tmp/my%20plot.png"),
-    "![my-plot-draft.png](file:///tmp/my%20plot.png)"
+    "[my-plot-draft.png](file:///tmp/my%20plot.png)"
   );
   assert.equal(
     createComposerImageText({
@@ -28,7 +28,7 @@ test("image upload helpers sanitize names and create markdown references", () =>
       fileName: "plot.png",
       fileUrl: "file:///tmp/plot.png"
     }),
-    "please inspect this\n\n![plot.png](file:///tmp/plot.png)"
+    "please inspect this\n\n[plot.png](file:///tmp/plot.png)"
   );
 });
 
@@ -40,7 +40,7 @@ test("image upload helpers decode data URLs", () => {
 test("local image uploads use the configured user-visible root", async (t) => {
   const previousRoot = process.env[IMAGE_UPLOAD_DIR_ENV];
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "kitty-remote-deck-upload-"));
-  const uploadRoot = path.join(tempRoot, "Pictures", "voxpress");
+  const uploadRoot = path.join(tempRoot, "Pictures", "remote-deck");
 
   t.after(async () => {
     if (previousRoot === undefined) {

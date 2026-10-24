@@ -355,7 +355,7 @@ async function runMobileChatViewport(client, width, height, label) {
         screen: rect('#screenOutput'),
         panel: rect('.bottom-panel'),
         input: rect('#sendTextInput'),
-        actions: rect('.console-actions'),
+        actions: rect('.chat-input-row'),
         backToSessionsDisplay: display('#mobileBackToSessionsBtn'),
         terminalLinks: Array.from(document.querySelectorAll('#screenOutput [data-preview-url]')).map((link) => link.dataset.previewUrl),
         selectedPane: state.selectedWindowId
@@ -683,8 +683,8 @@ async function runMobileChatViewport(client, width, height, label) {
         attachment: rect('#imageAttachment'),
         input: rect('#sendTextInput'),
         panel: rect('#bottomPanel'),
-        actions: rect('.console-actions'),
-        actionOrder: Array.from(document.querySelectorAll('.console-actions > button, .console-actions > .special-key-menu > button'))
+        actions: rect('.chat-input-row'),
+        actionOrder: Array.from(document.querySelectorAll('.chat-input-row > button'))
           .map((button) => ({
             id: button.id,
             left: button.getBoundingClientRect().left
@@ -1047,7 +1047,7 @@ async function runMobileChatViewport(client, width, height, label) {
     mobileFlow.composerEnter.image.beforeSend.input.height <= 0 ||
     mobileFlow.composerEnter.image.beforeSend.panel.height <= 0 ||
     mobileFlow.composerEnter.image.beforeSend.actions.height <= 0 ||
-    mobileFlow.composerEnter.image.beforeSend.actionOrder.join(",") !== "attachImageBtn,specialKeyMenuBtn,sendEnterBtn,sendTextBtn" ||
+    mobileFlow.composerEnter.image.beforeSend.actionOrder.join(",") !== "sendTextBtn" ||
     mobileFlow.composerEnter.image.beforeSend.attachment.bottom > mobileFlow.composerEnter.image.beforeSend.input.top ||
     mobileFlow.composerEnter.image.beforeSend.input.bottom > mobileFlow.composerEnter.image.beforeSend.actions.top ||
     mobileFlow.composerEnter.image.beforeSend.actions.bottom > mobileFlow.composerEnter.image.beforeSend.panel.bottom + 1 ||
@@ -1615,16 +1615,16 @@ async function runViewport(client, width, height, label) {
         specialKeyMenu: {
           buttonText: document.querySelector('#specialKeyMenuBtn').textContent.trim(),
           expanded: document.querySelector('#specialKeyMenuBtn').getAttribute('aria-expanded'),
-          visibleActionIds: Array.from(document.querySelectorAll('.console-actions > button, .console-actions > .special-key-menu > button'))
+          visibleActionIds: Array.from(document.querySelectorAll('.chat-input-row > button'))
             .filter((button) => getComputedStyle(button).display !== 'none')
             .map((button) => button.id),
           labels: Array.from(document.querySelectorAll('#specialKeyMenuPopover [data-special-key-id]')).map((button) => button.textContent.trim()),
           keys: Array.from(document.querySelectorAll('#specialKeyMenuPopover [data-special-key-id]')).map((button) => button.dataset.specialKeyId)
         },
         panelImageButton: {
-          headerDisplay: getComputedStyle(document.querySelector('#attachImageHeadBtn')).display,
-          headerLabel: document.querySelector('#attachImageHeadBtn').getAttribute('aria-label'),
-          headerIcon: Boolean(document.querySelector('#attachImageHeadBtn .image-action-icon')),
+          headerDisplay: getComputedStyle(document.querySelector('#attachImageBtn')).display,
+          headerLabel: document.querySelector('#attachImageBtn').getAttribute('aria-label'),
+          headerIcon: Boolean(document.querySelector('#attachImageBtn .image-action-icon')),
           actionLabel: document.querySelector('#attachImageBtn').getAttribute('aria-label'),
           actionIcon: Boolean(document.querySelector('#attachImageBtn .image-action-icon')),
           actionDisplay: getComputedStyle(document.querySelector('#attachImageBtn')).display
@@ -1739,7 +1739,7 @@ async function runViewport(client, width, height, label) {
     !metrics.escClickStatus.includes("Select a pane first") ||
     metrics.specialKeyMenu.buttonText !== "Keys" ||
     metrics.specialKeyMenu.expanded !== "false" ||
-    metrics.specialKeyMenu.visibleActionIds.join(",") !== "sendTextBtn,sendEnterBtn,specialKeyMenuBtn" ||
+    metrics.specialKeyMenu.visibleActionIds.join(",") !== "sendTextBtn" ||
     !metrics.specialKeyMenu.labels.includes("Ctrl+A") ||
     !metrics.specialKeyMenu.labels.includes("Ctrl+D") ||
     !metrics.specialKeyMenu.labels.includes("Tab") ||

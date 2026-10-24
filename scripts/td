@@ -1,0 +1,455 @@
+#!/usr/bin/env python3
+"""td - pick a tmux session on any of your hosts and attach to it.
+
+The same sessions the kitty-remote-deck tmux targets show, from a terminal:
+local tmux plus every host in ~/.config/td/hosts, reached over ssh.
+
+  td                      interactive picker (Enter attach, n new, x kill, r refresh, q quit)
+  td ls                   print the table and exit
+  td HOST[:SESSION]       attach directly (HOST is an alias from the hosts file or "local")
+  td new HOST [NAME]      create a session on HOST and attach
+  td img [HOST[:SESSION]] upload the clipboard image to HOST and paste its link into
+                          the session's active pane; without arguments, the session the
+                          focused kitty window is attached to (bind it to a kitty key:
+                          map ctrl+shift+u launch --type=background td img)
+
+  --tab                   open the attach in a new kitty tab instead of this terminal
+  --socket NAME           use tmux -L NAME on every host
+  --hosts a,b,c           override the hosts file for this run
+
+Hosts file: one host per line, "alias [display name]"; "local" is this machine.
+"""
+
+import argparse
+import concurrent.futures
+import curses
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+
+HOSTS_FILE = os.path.expanduser("~/.config/td/hosts")
+SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=6"]
+SEP = "␟"
+# Non-interactive ssh shells skip rc files, so Homebrew/user tmux is not on PATH.
+PATH_PREFIX = 'PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"; '
+LIST_SCRIPT = (
+    PATH_PREFIX + "tmux {sock} list-sessions -F '#{{session_name}}{sep}#{{session_windows}}{sep}#{{session_attached}}{sep}#{{session_activity}}' 2>/dev/null; "
+    "echo '--panes--'; "
+    "tmux {sock} list-panes -a -F '#{{session_name}}{sep}#{{window_active}}{sep}#{{pane_active}}{sep}#{{pane_current_command}}{sep}#{{pane_current_path}}{sep}#{{window_activity}}' 2>/dev/null; "
+    "true"
+)
+
+
+def load_hosts(override):
+    if override:
+        return [(alias.strip(), alias.strip()) for alias in override.split(",") if alias.strip()]
+    hosts = []
+    try:
+        with open(HOSTS_FILE, encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split(None, 1)
+                hosts.append((parts[0], parts[1] if len(parts) > 1 else parts[0]))
+    except FileNotFoundError:
+        pass
+    return hosts or [("local", "local")]
+
+
+def remote_command(alias, command):
+    if alias == "local":
+        return ["sh", "-c", command]
+    return ["ssh", *SSH_OPTS, alias, command]
+
+
+def list_host(alias, display, socket):
+    sock = f"-L {shlex.quote(socket)}" if socket else ""
+    script = LIST_SCRIPT.format(sock=sock, sep=SEP)
+    try:
+        completed = subprocess.run(
+            remote_command(alias, script), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15, check=False
+        )
+    except subprocess.TimeoutExpired:
+        return {"alias": alias, "display": display, "error": "timed out", "sessions": []}
+    if completed.returncode != 0:
+        error = completed.stderr.strip().splitlines()
+        return {"alias": alias, "display": display, "error": error[-1] if error else f"exit {completed.returncode}", "sessions": []}
+    sessions, panes, activity = [], {}, {}
+    in_panes = False
+    for line in completed.stdout.splitlines():
+        if line == "--panes--":
+            in_panes = True
+            continue
+        fields = line.split(SEP)
+        if in_panes:
+            if len(fields) == 6:
+                # Pane output updates window_activity; session_activity only tracks clients.
+                activity[fields[0]] = max(activity.get(fields[0], 0), int(fields[5] or 0))
+                if fields[1] == "1" and fields[2] == "1":
+                    panes[fields[0]] = (fields[3], fields[4])
+        elif len(fields) == 4:
+            sessions.append({"name": fields[0], "windows": int(fields[1] or 0), "attached": int(fields[2] or 0), "activity": int(fields[3] or 0)})
+    for session in sessions:
+        command, path = panes.get(session["name"], ("", ""))
+        session["command"] = command
+        session["path"] = path
+        session["activity"] = max(session["activity"], activity.get(session["name"], 0))
+    return {"alias": alias, "display": display, "error": "", "sessions": sessions}
+
+
+def list_all(hosts, socket):
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(hosts))) as pool:
+        return list(pool.map(lambda host: list_host(host[0], host[1], socket), hosts))
+
+
+def relative(epoch):
+    if not epoch:
+        return ""
+    delta = int(time.time()) - epoch
+    if delta < 60:
+        return f"{delta}s"
+    if delta < 3600:
+        return f"{delta // 60}m"
+    if delta < 86400:
+        return f"{delta // 3600}h"
+    return f"{delta // 86400}d"
+
+
+def short_path(path):
+    home = os.path.expanduser("~")
+    if path.startswith(home):
+        path = "~" + path[len(home):]
+    if path.startswith("/home/") or path.startswith("/Users/"):
+        parts = path.split("/")
+        if len(parts) > 3:
+            path = "~/" + "/".join(parts[3:])
+    return path
+
+
+def rows_for(results):
+    rows = []
+    for result in results:
+        rows.append({"kind": "host", "host": result})
+        if result["error"]:
+            rows.append({"kind": "note", "text": f"  unreachable: {result['error']}"})
+        elif not result["sessions"]:
+            rows.append({"kind": "note", "text": "  no sessions"})
+        for session in result["sessions"]:
+            rows.append({"kind": "session", "host": result, "session": session})
+    return rows
+
+
+def format_session(session, width):
+    mark = "●" if session["attached"] else "○"
+    left = f"  {mark} {session['name']:<18.18} {session['windows']:>2}w  {relative(session['activity']):>4}  "
+    right = f"{session['command']}  {short_path(session['path'])}"
+    return (left + right)[:width]
+
+
+def tmux_argv(socket, *args):
+    return ["tmux", *(["-L", socket] if socket else []), *args]
+
+
+def attach(alias, name, socket, tab, title=None):
+    if alias == "local":
+        if os.environ.get("TMUX") and not tab:
+            subprocess.run(tmux_argv(socket, "new-session", "-d", "-s", name), stderr=subprocess.DEVNULL, check=False)
+            os.execvp("tmux", tmux_argv(socket, "switch-client", "-t", name))
+        argv = tmux_argv(socket, "new-session", "-A", "-s", name)
+    else:
+        # ssh forwards TERM; a host without that terminfo (xterm-kitty on a fresh
+        # machine) makes tmux refuse to start, so fall back to xterm-256color there.
+        inner = (
+            PATH_PREFIX
+            + 'infocmp "$TERM" >/dev/null 2>&1 || export TERM=xterm-256color; exec '
+            + " ".join(shlex.quote(part) for part in tmux_argv(socket, "new-session", "-A", "-s", name))
+        )
+        argv = ["ssh", "-t", alias, inner]
+    if tab:
+        launch = [*kitten_argv(), "launch", "--type=tab", "--tab-title", title or f"{alias}:{name}", *argv]
+        completed = subprocess.run(launch, check=False)
+        if completed.returncode != 0:
+            sys.exit("kitten @ launch failed; is kitty remote control enabled (allow_remote_control yes)?")
+        return
+    os.execvp(argv[0], argv)
+
+
+def kitten_argv():
+    # A kitty built from source may not be on PATH; find kitten next to the
+    # running kitty binary, then the macOS bundle.
+    kitten = shutil.which("kitten")
+    pid = os.environ.get("KITTY_PID")
+    if not kitten and pid and os.path.exists(f"/proc/{pid}/exe"):
+        candidate = os.path.join(os.path.dirname(os.path.realpath(f"/proc/{pid}/exe")), "kitten")
+        kitten = candidate if os.path.exists(candidate) else None
+    if not kitten and os.path.exists("/Applications/kitty.app/Contents/MacOS/kitten"):
+        kitten = "/Applications/kitty.app/Contents/MacOS/kitten"
+    argv = [kitten or "kitten", "@"]
+    if not os.environ.get("KITTY_LISTEN_ON") and pid:
+        argv += ["--to", f"unix:/tmp/kitty.sock-{pid}"]
+    return argv
+
+
+def clipboard_png():
+    """PNG bytes from the local clipboard, or b"" when it holds no image."""
+    if sys.platform == "darwin":
+        if shutil.which("pngpaste"):
+            out = subprocess.run(["pngpaste", "-"], capture_output=True)
+            if out.returncode == 0 and out.stdout:
+                return out.stdout
+        out = subprocess.run(["osascript", "-e", "the clipboard as «class PNGf»"], capture_output=True, text=True)
+        match = re.search(r"«data PNGf([0-9A-Fa-f]+)»", out.stdout)
+        return bytes.fromhex(match.group(1)) if match else b""
+    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-paste"):
+        out = subprocess.run(["wl-paste", "-t", "image/png"], capture_output=True)
+        return out.stdout if out.returncode == 0 else b""
+    if shutil.which("xclip"):
+        targets = subprocess.run(["xclip", "-selection", "clipboard", "-o", "-t", "TARGETS"], capture_output=True, text=True).stdout
+        if "image/png" not in targets.split():
+            return b""
+        return subprocess.run(["xclip", "-selection", "clipboard", "-o", "-t", "image/png"], capture_output=True).stdout
+    sys.exit("no clipboard tool found (need xclip, wl-paste, or pngpaste/osascript)")
+
+
+def parse_attach(cmdline, aliases):
+    """(alias, session) from a `td`-style ssh/tmux command line, session may be ""."""
+    if not cmdline:
+        return None
+    joined = " ".join(cmdline)
+    match = re.search(r"new-session\s+(?:-A\s+)?-s\s+(?:'([^']*)'|(\S+))", joined)
+    session = (match.group(1) or match.group(2)) if match else ""
+    program = os.path.basename(cmdline[0])
+    if program == "tmux":
+        return ("local", session)
+    if program == "ssh":
+        alias = next((arg for arg in cmdline[1:] if arg in aliases), None)
+        return (alias, session) if alias else None
+    return None
+
+
+def focused_attach(aliases):
+    """What the focused kitty window is attached to, from its foreground process."""
+    out = subprocess.run([*kitten_argv(), "ls"], capture_output=True, text=True)
+    if out.returncode != 0:
+        return None
+    # Every OS window reports a focused window; take the one focused most recently.
+    candidates = []
+    for os_window in json.loads(out.stdout):
+        for tab in os_window.get("tabs", []):
+            for window in tab.get("windows", []):
+                if window.get("is_focused"):
+                    rank = (bool(os_window.get("is_focused")), bool(tab.get("is_focused")), window.get("last_focused_at") or 0)
+                    candidates.append((rank, window))
+    for _, window in sorted(candidates, key=lambda item: item[0], reverse=True):
+        for proc in window.get("foreground_processes", []):
+            found = parse_attach(proc.get("cmdline") or [], aliases)
+            if found:
+                return found
+    return None
+
+
+def send_image(alias, name, socket, data):
+    """Store PNG bytes under ~/Pictures/remote-deck/YYYYMMDD on HOST (same place the
+    deck uploads to) and paste a Markdown link into the session's active pane."""
+    stamp = time.strftime("%Y%m%d%H%M%S", time.gmtime())  # UTC, like the deck's uploads
+    file_name = f"{stamp}-{os.urandom(3).hex()}-clipboard.png"
+    sock = f"-L {shlex.quote(socket)}" if socket else ""
+    script = PATH_PREFIX + (
+        f'd="$HOME/Pictures/remote-deck/{stamp[:8]}"; f="$d/{file_name}"; '
+        f'mkdir -p "$d" && cat > "$f" && chmod 600 "$f" || exit 1; '
+        f's={shlex.quote(name)}; '
+        f'[ -n "$s" ] || s=$(tmux {sock} list-clients -F "#{{client_activity}} #{{session_name}}" | sort -rn | head -1 | cut -d" " -f2-); '
+        f'[ -n "$s" ] || {{ echo "no attached tmux client on this host; use td img HOST:SESSION" >&2; exit 2; }}; '
+        f'printf "%s" "[{file_name}](file://$f)" | tmux {sock} load-buffer -b td-img - '
+        f'&& tmux {sock} paste-buffer -d -p -b td-img -t "$s" && echo "$s $f"'
+    )
+    completed = subprocess.run(remote_command(alias, script), input=data, capture_output=True)
+    if completed.returncode != 0:
+        return None, completed.stderr.decode(errors="replace").strip() or f"exit {completed.returncode}"
+    session, _, path = completed.stdout.decode().strip().partition(" ")
+    return (session, path), ""
+
+
+def notify(message):
+    # `td img` usually runs from a kitty key binding with no visible terminal.
+    print(message, file=sys.stderr)
+    if os.environ.get("KITTY_WINDOW_ID") and not sys.stderr.isatty():
+        subprocess.run([kitten_argv()[0], "notify", "td img", message], check=False, capture_output=True)
+
+
+def image_command(args, hosts, socket):
+    aliases = {alias for alias, _ in hosts} | {"local"}
+    if len(args) > 1:
+        alias, _, name = args[1].partition(":")
+        if alias not in aliases:
+            sys.exit(f"unknown host {alias}; known: {', '.join(sorted(aliases))}")
+    else:
+        found = focused_attach(aliases)
+        if not found:
+            notify("cannot tell which session the focused kitty window is attached to; use td img HOST[:SESSION]")
+            sys.exit(2)
+        alias, name = found
+    data = clipboard_png()
+    if not data:
+        notify("clipboard holds no image")
+        sys.exit(2)
+    result, error = send_image(alias, name, socket, data)
+    if not result:
+        notify(f"{alias}: {error}")
+        sys.exit(1)
+    print(f"sent {len(data)} bytes to {alias}:{result[0]} as {result[1]}")
+
+
+def kill_session(alias, name, socket):
+    sock = f"-L {shlex.quote(socket)}" if socket else ""
+    subprocess.run(remote_command(alias, PATH_PREFIX + f"tmux {sock} kill-session -t {shlex.quote(name)}"), check=False)
+
+
+def print_table(results):
+    for row in rows_for(results):
+        if row["kind"] == "host":
+            host = row["host"]
+            print(f"{host['display']} ({host['alias']})")
+        elif row["kind"] == "note":
+            print(row["text"])
+        else:
+            print(format_session(row["session"], 200))
+
+
+def prompt(stdscr, question):
+    height, width = stdscr.getmaxyx()
+    stdscr.move(height - 1, 0)
+    stdscr.clrtoeol()
+    stdscr.addnstr(height - 1, 0, question, width - 1)
+    curses.echo()
+    curses.curs_set(1)
+    try:
+        answer = stdscr.getstr(height - 1, min(len(question), width - 2), 60).decode("utf-8", "replace").strip()
+    except KeyboardInterrupt:
+        answer = ""
+    finally:
+        curses.noecho()
+        curses.curs_set(0)
+    return answer
+
+
+def picker(stdscr, hosts, socket, tab):
+    curses.curs_set(0)
+    curses.use_default_colors()
+    curses.init_pair(1, curses.COLOR_CYAN, -1)
+    curses.init_pair(2, curses.COLOR_GREEN, -1)
+    curses.init_pair(3, curses.COLOR_YELLOW, -1)
+    results = list_all(hosts, socket)
+    rows = rows_for(results)
+    selectable = [index for index, row in enumerate(rows) if row["kind"] in ("session", "host")]
+    cursor = next((index for index in selectable if rows[index]["kind"] == "session"), selectable[0] if selectable else 0)
+    message = ""
+    while True:
+        stdscr.erase()
+        height, width = stdscr.getmaxyx()
+        stdscr.addnstr(0, 0, "td — tmux sessions   Enter attach  n new  x kill  r refresh  q quit", width - 1, curses.A_BOLD)
+        top = max(0, cursor - (height - 4))
+        for line, index in enumerate(range(top, min(len(rows), top + height - 3)), start=2):
+            row = rows[index]
+            attrs = curses.A_REVERSE if index == cursor else 0
+            if row["kind"] == "host":
+                host = row["host"]
+                label = f"{host['display']}" + (f"  ({host['alias']})" if host["alias"] != host["display"] else "")
+                stdscr.addnstr(line, 0, label, width - 1, attrs | curses.color_pair(1) | curses.A_BOLD)
+            elif row["kind"] == "note":
+                stdscr.addnstr(line, 0, row["text"], width - 1, attrs | curses.color_pair(3))
+            else:
+                session = row["session"]
+                color = curses.color_pair(2) if session["attached"] else 0
+                stdscr.addnstr(line, 0, format_session(session, width - 1), width - 1, attrs | color)
+        if message:
+            stdscr.addnstr(height - 1, 0, message, width - 1, curses.color_pair(3))
+        stdscr.refresh()
+        key = stdscr.getch()
+        message = ""
+        if key in (ord("q"), 27):
+            return None
+        if key in (curses.KEY_DOWN, ord("j")):
+            later = [index for index in selectable if index > cursor]
+            cursor = later[0] if later else cursor
+        elif key in (curses.KEY_UP, ord("k")):
+            earlier = [index for index in selectable if index < cursor]
+            cursor = earlier[-1] if earlier else cursor
+        elif key == ord("r"):
+            results = list_all(hosts, socket)
+            rows = rows_for(results)
+            selectable = [index for index, row in enumerate(rows) if row["kind"] in ("session", "host")]
+            cursor = min(cursor, max(selectable) if selectable else 0)
+        elif key in (curses.KEY_ENTER, 10, 13):
+            row = rows[cursor]
+            if row["kind"] == "session":
+                return (row["host"]["alias"], row["session"]["name"])
+            message = "Select a session, or press n for a new one on this host."
+        elif key == ord("n"):
+            row = rows[cursor]
+            if row["kind"] in ("session", "host"):
+                name = prompt(stdscr, f"New session on {row['host']['display']}: ")
+                if name:
+                    return (row["host"]["alias"], name)
+        elif key == ord("x"):
+            row = rows[cursor]
+            if row["kind"] == "session":
+                answer = prompt(stdscr, f"Kill {row['host']['display']}:{row['session']['name']}? [y/N] ")
+                if answer.lower() == "y":
+                    kill_session(row["host"]["alias"], row["session"]["name"], socket)
+                    results = list_all(hosts, socket)
+                    rows = rows_for(results)
+                    selectable = [index for index, row in enumerate(rows) if row["kind"] in ("session", "host")]
+                    cursor = min(cursor, max(selectable) if selectable else 0)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("args", nargs="*")
+    parser.add_argument("--tab", action="store_true", help="open the attach in a new kitty tab")
+    parser.add_argument("--socket", default="", help="tmux -L socket name")
+    parser.add_argument("--hosts", default="", help="comma-separated host aliases")
+    options = parser.parse_args()
+    hosts = load_hosts(options.hosts)
+    aliases = {alias for alias, _ in hosts}
+
+    if options.args and options.args[0] == "ls":
+        print_table(list_all(hosts, options.socket))
+        return
+    if options.args and options.args[0] == "img":
+        image_command(options.args, hosts, options.socket)
+        return
+    if options.args and options.args[0] == "new":
+        if len(options.args) < 2:
+            sys.exit("usage: td new HOST [NAME]")
+        name = options.args[2] if len(options.args) > 2 else time.strftime("s%H%M")
+        attach(options.args[1], name, options.socket, options.tab)
+        return
+    if options.args:
+        alias, _, name = options.args[0].partition(":")
+        if alias not in aliases and alias != "local":
+            sys.exit(f"unknown host {alias}; known: {', '.join(sorted(aliases))}")
+        if not name:
+            result = list_host(alias, alias, options.socket)
+            if not result["sessions"]:
+                sys.exit(f"{alias}: no sessions ({result['error'] or 'use td new'})")
+            name = result["sessions"][0]["name"]
+        attach(alias, name, options.socket, options.tab)
+        return
+
+    if not sys.stdin.isatty():
+        print_table(list_all(hosts, options.socket))
+        return
+    choice = curses.wrapper(picker, hosts, options.socket, options.tab)
+    if choice:
+        attach(choice[0], choice[1], options.socket, options.tab)
+
+
+if __name__ == "__main__":
+    main()

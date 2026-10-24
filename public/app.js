@@ -2,17 +2,25 @@ const STORAGE_KEY = "kitty-remote-deck-ui";
 const DEBUG_STORAGE_KEY = "kitty-remote-deck-debug";
 const CLIENT_BUILD = "0.2.1";
 const MOBILE_HISTORY_KEY = "krdMobileScreen";
+const LAST_PANE_STORAGE_KEY = "kitty-remote-deck-last-pane";
 const FONT_SIZE_RANGE = { min: 5, max: 18, default: 13 };
 const THEME_SET = new Set(["dark", "graphite", "light"]);
 const TEXT_EXTENT_SET = new Set(["screen", "all"]);
 const MOBILE_TERMINAL_WIDTH_SET = new Set(["fit", "wide"]);
 const MOBILE_SCREEN_SET = new Set(["connect", "sessions", "chat", "browser"]);
 const SIDEBAR_WIDTH_RANGE = { min: 220, max: 520 };
-const PANEL_HEIGHT_RANGE = { min: 150, max: 420 };
+// The chat composer grows with its text up to this height; 230 was the old fixed panel height.
+const PANEL_HEIGHT_RANGE = { min: 80, max: 420, default: 160, legacyDefault: 230 };
 const BROWSER_WIDTH_RANGE = { min: 320, max: 900, default: 560 };
-const AUTO_REFRESH_MS = 5000;
-const SESSION_TREE_REFRESH_EVERY_TICKS = 3;
-const ALL_TEXT_AUTO_REFRESH_EVERY_TICKS = 3;
+// Adaptive polling: refresh fast while the pane is changing or just received input,
+// then back off as it goes quiet. Polling pauses while the page is hidden.
+const POLL_ACTIVE_MS = 700;
+const POLL_WARM_MS = 1500;
+const POLL_IDLE_MS = 4000;
+const POLL_ACTIVE_WINDOW_MS = 15000;
+const POLL_WARM_WINDOW_MS = 60000;
+const SESSION_TREE_REFRESH_MS = 15000;
+const ALL_TEXT_AUTO_REFRESH_MS = 15000;
 const WHEEL_SCROLL_DEBOUNCE_MS = 70;
 const WHEEL_SCROLL_MAX_LINES = 80;
 const TOUCH_SCROLL_LINE_PX = 42;
@@ -32,16 +40,56 @@ const BROWSER_UTILS = window.KRDBrowserUtils;
 const MOBILE_UTILS = window.KRDMobileUtils;
 const PREVIEW_HISTORY = window.KRDPreviewHistory;
 const COMPOSER_UTILS = window.KRDComposerUtils;
+const PANE_TREE = window.KRDPaneTree;
+const PANE_LAYOUT_STORAGE_KEY = "kitty-remote-deck.paneLayout.v1";
+const SECONDARY_VIEW_POLL_MS = 2000;
 const ANSI_UTILS = window.KRDAnsiUtils;
 
 const DEFAULT_TARGET_FORM = {
   name: "Local Kitty",
   transport: "local",
+  backend: "kitty",
   sshTarget: "",
   kittyBinary: "kitty",
+  tmuxBinary: "tmux",
   socketPattern: "/tmp/kitty.sock-*",
   defaultSocket: "",
   notes: ""
+};
+
+// The session tree keeps kitty's shape for both backends; only the names differ.
+// tmux: session -> OS window, window -> tab, pane -> pane.
+const BACKEND_DEFAULTS = {
+  kitty: {
+    socketPattern: "/tmp/kitty.sock-*",
+    socketPlaceholder: "/tmp/kitty.sock-*",
+    defaultSocketPlaceholder: "/tmp/kitty.sock-11305",
+    sectionTitle: "Kitty Remote Control",
+    sectionHint: "kitty @",
+    labels: {
+      osWindow: "OS Window",
+      tab: "Tab",
+      window: "Pane",
+      createWindow: "New Window",
+      createTab: "New Tab",
+      createSplit: "New Split"
+    }
+  },
+  tmux: {
+    socketPattern: "",
+    socketPlaceholder: "auto: $TMUX_TMPDIR/tmux-UID/*",
+    defaultSocketPlaceholder: "/tmp/tmux-1000/default",
+    sectionTitle: "tmux Server",
+    sectionHint: "tmux -S",
+    labels: {
+      osWindow: "Session",
+      tab: "Window",
+      window: "Pane",
+      createWindow: "New Session",
+      createTab: "New Window",
+      createSplit: "New Split"
+    }
+  }
 };
 
 const state = {
@@ -53,6 +101,8 @@ const state = {
   selectedSocket: "",
   sessionTree: [],
   flatWindows: [],
+  sessionLabels: BACKEND_DEFAULTS.kitty.labels,
+  sessionBackend: "kitty",
   selectedWindowId: null,
   screenText: "",
   autoRefresh: true,
@@ -61,7 +111,13 @@ const state = {
   sidebarVisible: true,
   uiFontSizePx: FONT_SIZE_RANGE.default,
   uiTheme: "dark",
-  screenExtent: "screen",
+  screenExtent: "all",
+  screenExtentExplicit: false,
+  autoFitPane: true,
+  // Browser-side view splits (see modules/pane-tree.js). The active leaf is the
+  // view that the single-selection state below describes.
+  paneRoot: null,
+  activePaneId: null,
   allTextFollowTail: true,
   previewVisible: false,
   previewPinned: false,
@@ -75,7 +131,7 @@ const state = {
   resizeEnabled: false,
   sidebarWidth: 320,
   browserWidth: BROWSER_WIDTH_RANGE.default,
-  bottomPanelHeight: 230,
+  bottomPanelHeight: PANEL_HEIGHT_RANGE.default,
   imageAttachment: null,
   composerSending: false,
   sessionCreating: false
@@ -129,6 +185,7 @@ const elements = {
   editorPane: document.querySelector("#editorPane"),
   viewerMeta: document.querySelector("#viewerMeta"),
   screenOutput: document.querySelector("#screenOutput"),
+  latestOutputBtn: document.querySelector("#latestOutputBtn"),
   bottomPanel: document.querySelector("#bottomPanel"),
   previewDrawer: document.querySelector("#previewDrawer"),
   previewTitle: document.querySelector("#previewTitle"),
@@ -147,15 +204,24 @@ const elements = {
   screenModeBtn: document.querySelector("#screenModeBtn"),
   allTextModeBtn: document.querySelector("#allTextModeBtn"),
   refreshTextBtn: document.querySelector("#refreshTextBtn"),
+  editorMenu: document.querySelector("#editorMenu"),
+  editorMenuBtn: document.querySelector("#editorMenuBtn"),
+  editorMenuPopover: document.querySelector("#editorMenuPopover"),
+  autoFitToggle: document.querySelector("#autoFitToggle"),
+  fitPaneBtn: document.querySelector("#fitPaneBtn"),
+  zoomPaneBtn: document.querySelector("#zoomPaneBtn"),
+  paneTree: document.querySelector("#paneTree"),
+  splitRightBtn: document.querySelector("#splitRightBtn"),
+  splitDownBtn: document.querySelector("#splitDownBtn"),
+  closeViewBtn: document.querySelector("#closeViewBtn"),
+  sendRawTextBtn: document.querySelector("#sendRawTextBtn"),
   sendTextBtn: document.querySelector("#sendTextBtn"),
-  sendEnterBtn: document.querySelector("#sendEnterBtn"),
   specialKeyMenu: document.querySelector("#specialKeyMenu"),
   specialKeyMenuBtn: document.querySelector("#specialKeyMenuBtn"),
   specialKeyMenuPopover: document.querySelector("#specialKeyMenuPopover"),
   sendForm: document.querySelector("#sendForm"),
   sendTextInput: document.querySelector("#sendTextInput"),
   composerStack: document.querySelector("#composerStack"),
-  attachImageHeadBtn: document.querySelector("#attachImageHeadBtn"),
   attachImageBtn: document.querySelector("#attachImageBtn"),
   imageInput: document.querySelector("#imageInput"),
   imageAttachment: document.querySelector("#imageAttachment"),
@@ -171,7 +237,13 @@ const elements = {
   statusAutoRefresh: document.querySelector("#statusAutoRefresh"),
   targetName: document.querySelector("#targetName"),
   targetSsh: document.querySelector("#targetSsh"),
+  targetBackend: document.querySelector("#targetBackend"),
+  targetBackendSectionTitle: document.querySelector("#targetBackendSectionTitle"),
+  targetBackendSectionHint: document.querySelector("#targetBackendSectionHint"),
   targetKittyBinary: document.querySelector("#targetKittyBinary"),
+  targetKittyBinaryField: document.querySelector("#targetKittyBinaryField"),
+  targetTmuxBinary: document.querySelector("#targetTmuxBinary"),
+  targetTmuxBinaryField: document.querySelector("#targetTmuxBinaryField"),
   targetSocketPattern: document.querySelector("#targetSocketPattern"),
   targetDefaultSocket: document.querySelector("#targetDefaultSocket"),
   targetNotes: document.querySelector("#targetNotes")
@@ -186,7 +258,17 @@ let screenTouchScroll = null;
 let screenRequestSerial = 0;
 let screenAbortController = null;
 let sessionRequestSerial = 0;
-let autoRefreshTick = 0;
+let pollGeneration = 0;
+let pollInFlight = false;
+// True after Screen-mode scrolling moves the kitty viewport into history.
+let viewportScrolledBack = false;
+let lastScreenActivityAt = 0;
+let lastTreeRefreshAt = 0;
+let lastAllTextRefreshAt = 0;
+// Hash of the screen currently rendered, so polls can ask the server for "unchanged".
+let renderedScreen = { key: "", hash: "", text: null, data: null };
+// Pane id -> text last drawn into the tmux window layout (see renderWindowLayout).
+let renderedPaneTexts = new Map();
 let sessionPointerStart = null;
 let suppressSessionClickUntil = 0;
 let clientDebugEnabled = false;
@@ -199,6 +281,41 @@ let mobileAutoConnectInFlight = false;
 
 function getSelectedTarget() {
   return state.targets.find((target) => target.id === state.selectedTargetId) || null;
+}
+
+function selectedPane() {
+  return state.flatWindows.find((window) => Number(window.id) === Number(state.selectedWindowId)) || null;
+}
+
+// Alternate-screen apps (Claude Code fullscreen, vim) keep no scrollback, so the
+// All view would only show stale shell history. Such panes always use the
+// viewport semantics, and scroll gestures become the app's PgUp/PgDn keys.
+function activeExtent() {
+  return selectedPane()?.alternate_on ? "screen" : state.screenExtent;
+}
+
+// tmux pane ids start at %0, so the selection must not be tested for truthiness.
+function hasSelectedWindow() {
+  return state.selectedWindowId !== null && state.selectedWindowId !== undefined && state.selectedWindowId !== "";
+}
+
+function normalizeBackend(value) {
+  return value === "tmux" ? "tmux" : "kitty";
+}
+
+function getBackendDefaults(backend) {
+  return BACKEND_DEFAULTS[normalizeBackend(backend)];
+}
+
+function labelsForTarget(target) {
+  return getBackendDefaults(target?.backend).labels;
+}
+
+function describePaneLocation(pane) {
+  const labels = state.sessionLabels;
+  const osWindowName = pane.osWindowTitle || `#${pane.osWindowId}`;
+  const tabName = pane.osWindowTitle ? pane.tabTitle || `#${pane.tabId}` : `#${pane.tabId}`;
+  return `${labels.osWindow} ${osWindowName} / ${labels.tab} ${tabName} / #${pane.id}`;
 }
 
 function getEditingTarget() {
@@ -531,9 +648,13 @@ function loadUiPreferences() {
 
     const parsed = JSON.parse(raw);
     state.autoRefresh = parsed.autoRefresh !== false;
+    state.autoFitPane = parsed.autoFitPane !== false;
     state.uiFontSizePx = normalizeFontSizePx(parsed.uiFontSizePx ?? parsed.uiFontSize);
     state.uiTheme = THEME_SET.has(parsed.uiTheme) ? parsed.uiTheme : "dark";
-    state.screenExtent = TEXT_EXTENT_SET.has(parsed.screenExtent) ? parsed.screenExtent : "screen";
+    // All is the default; a stored Screen choice only sticks if the user picked it from the menu.
+    state.screenExtentExplicit = parsed.screenExtentExplicit === true;
+    activeExtent() =
+      state.screenExtentExplicit && TEXT_EXTENT_SET.has(parsed.screenExtent) ? parsed.screenExtent : "all";
     state.mobileTerminalWidth = MOBILE_TERMINAL_WIDTH_SET.has(parsed.mobileTerminalWidth)
       ? parsed.mobileTerminalWidth
       : "fit";
@@ -563,14 +684,18 @@ function loadUiPreferences() {
     state.browserWidth = Number.isFinite(parsed.browserWidth)
       ? clamp(parsed.browserWidth, BROWSER_WIDTH_RANGE.min, BROWSER_WIDTH_RANGE.max)
       : BROWSER_WIDTH_RANGE.default;
-    state.bottomPanelHeight = Number.isFinite(parsed.bottomPanelHeight)
-      ? clamp(parsed.bottomPanelHeight, PANEL_HEIGHT_RANGE.min, PANEL_HEIGHT_RANGE.max)
-      : 230;
+    // A stored value equal to the old default was never chosen by the user; take the new one.
+    state.bottomPanelHeight =
+      Number.isFinite(parsed.bottomPanelHeight) && parsed.bottomPanelHeight !== PANEL_HEIGHT_RANGE.legacyDefault
+        ? clamp(parsed.bottomPanelHeight, PANEL_HEIGHT_RANGE.min, PANEL_HEIGHT_RANGE.max)
+        : PANEL_HEIGHT_RANGE.default;
   } catch (error) {
     state.autoRefresh = true;
+    state.autoFitPane = true;
     state.uiFontSizePx = FONT_SIZE_RANGE.default;
     state.uiTheme = "dark";
-    state.screenExtent = "screen";
+    state.screenExtent = "all";
+    state.screenExtentExplicit = false;
     state.mobileTerminalWidth = "fit";
     state.mobileScreen = "connect";
     state.resizeEnabled = false;
@@ -582,8 +707,44 @@ function loadUiPreferences() {
     state.previewHistoryIndex = -1;
     state.sidebarWidth = 320;
     state.browserWidth = BROWSER_WIDTH_RANGE.default;
-    state.bottomPanelHeight = 230;
+    state.bottomPanelHeight = PANEL_HEIGHT_RANGE.default;
   }
+}
+
+// The last selected pane is restored after a reload when the same target and socket
+// still list it. kitty window ids are not reused within one kitty instance, and the
+// socket path names that instance.
+function rememberSelectedPane() {
+  if (!state.selectedTargetId || !hasSelectedWindow()) {
+    return;
+  }
+  syncActivePaneActor();
+  try {
+    localStorage.setItem(
+      LAST_PANE_STORAGE_KEY,
+      JSON.stringify({
+        targetId: state.selectedTargetId,
+        socket: state.selectedSocket,
+        windowId: Number(state.selectedWindowId)
+      })
+    );
+  } catch (error) {
+    // Storage can be unavailable (private mode); restoration is a convenience only.
+  }
+}
+
+function findRestorablePane(targetId) {
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(LAST_PANE_STORAGE_KEY) || "null");
+  } catch (error) {
+    return null;
+  }
+  if (!saved || saved.targetId !== targetId || saved.socket !== state.selectedSocket) {
+    return null;
+  }
+  const windowId = Number(saved.windowId);
+  return state.flatWindows.some((window) => Number(window.id) === windowId) ? windowId : null;
 }
 
 function saveUiPreferences() {
@@ -591,9 +752,11 @@ function saveUiPreferences() {
     STORAGE_KEY,
     JSON.stringify({
       autoRefresh: state.autoRefresh,
+      autoFitPane: state.autoFitPane,
       uiFontSizePx: state.uiFontSizePx,
       uiTheme: state.uiTheme,
       screenExtent: state.screenExtent,
+      screenExtentExplicit: state.screenExtentExplicit === true,
       mobileTerminalWidth: state.mobileTerminalWidth,
       previewVisible: state.previewVisible,
       previewPinned: state.previewPinned,
@@ -749,14 +912,14 @@ function refreshPaneAfterMobileReturn() {
     !isMobileViewport() ||
     state.mobileScreen !== "chat" ||
     !state.selectedTargetId ||
-    !state.selectedWindowId
+    !hasSelectedWindow()
   ) {
     return;
   }
 
   refreshScreen({
     force: true,
-    scrollToBottom: state.screenExtent === "all" && state.allTextFollowTail
+    scrollToBottom: activeExtent() === "all" && state.allTextFollowTail
   }).catch((error) => setStatus(error.message, "danger"));
 }
 
@@ -830,6 +993,7 @@ function applyUiState() {
   }
   renderBrowserHistoryOptions();
   elements.autoRefreshToggle.checked = state.autoRefresh;
+  elements.autoFitToggle.checked = state.autoFitPane;
   elements.fontSizeValue.textContent = `${state.uiFontSizePx}px`;
   elements.themeSelect.value = state.uiTheme;
   elements.screenModeBtn.classList.toggle("active", state.screenExtent === "screen");
@@ -837,7 +1001,7 @@ function applyUiState() {
   elements.screenModeBtn.setAttribute("aria-pressed", String(state.screenExtent === "screen"));
   elements.allTextModeBtn.setAttribute("aria-pressed", String(state.screenExtent === "all"));
   elements.refreshTextBtn.textContent = state.screenExtent === "all" ? "Refresh All" : "Refresh";
-  elements.screenOutput.dataset.extent = state.screenExtent;
+  elements.screenOutput.dataset.extent = activeExtent();
   elements.mobileTerminalWidthBtn.classList.toggle("active", state.mobileTerminalWidth === "wide");
   elements.mobileTerminalWidthBtn.setAttribute("aria-pressed", String(state.mobileTerminalWidth === "wide"));
   elements.mobileTerminalWidthBtn.textContent = state.mobileTerminalWidth === "wide" ? "Wide" : "Fit";
@@ -850,6 +1014,7 @@ function applyUiState() {
   document.documentElement.style.setProperty("--sidebar-width", `${getEffectiveSidebarWidth()}px`);
   document.documentElement.style.setProperty("--browser-width", `${getEffectiveBrowserWidth()}px`);
   document.documentElement.style.setProperty("--bottom-panel-height", `${state.bottomPanelHeight}px`);
+  autosizeComposer();
   applyResizeLabel();
   updateStatusBar();
   saveUiPreferences();
@@ -862,6 +1027,19 @@ function applyResizeLabel() {
 function stepFontSize(delta) {
   state.uiFontSizePx = clamp(state.uiFontSizePx + delta, FONT_SIZE_RANGE.min, FONT_SIZE_RANGE.max);
   applyUiState();
+  // Cell size changed: redraw the layout at the new size now, then refit the pane.
+  syncLayoutCellSize();
+  scheduleAutoFit();
+}
+
+function syncLayoutCellSize() {
+  const container = elements.screenOutput.querySelector(".tmux-window");
+  if (!container) {
+    return;
+  }
+  const cell = measureCellSize(elements.screenOutput);
+  container.style.setProperty("--cell-w", `${cell.width}px`);
+  container.style.setProperty("--cell-h", `${cell.height}px`);
 }
 
 function setStatus(message, mode) {
@@ -995,9 +1173,8 @@ function setAuthState(authenticated, device = null) {
   elements.authDeviceLabel.textContent = state.authDevice ? `Key: ${getAuthDeviceText(state.authDevice)}` : "";
   setAuthDeviceMeta(state.authDevice);
 
-  if (!state.authenticated && pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
+  if (!state.authenticated) {
+    stopPolling();
   }
 
   if (!state.authenticated) {
@@ -1010,9 +1187,7 @@ function updateStatusBar() {
   const pane = state.flatWindows.find((window) => Number(window.id) === Number(state.selectedWindowId));
   elements.statusTargetName.textContent = `Target: ${target ? target.name : "-"}`;
   elements.statusSocketName.textContent = `Socket: ${state.selectedSocket || "auto"}`;
-  elements.statusPaneName.textContent = pane
-    ? `Pane: Window ${pane.osWindowId} / Tab ${pane.tabId} / #${pane.id}`
-    : "Pane: -";
+  elements.statusPaneName.textContent = pane ? `Pane: ${describePaneLocation(pane)}` : "Pane: -";
   elements.statusAutoRefresh.textContent = `Auto-refresh: ${state.autoRefresh ? "on" : "off"}`;
 }
 
@@ -1054,26 +1229,135 @@ function shouldForwardWheelToKitty(event) {
   return shouldForwardScrollDeltaToKitty(event.deltaY || 0);
 }
 
+function renderScreenData(data, options = {}) {
+  if (data && Array.isArray(data.panes) && data.window) {
+    renderWindowLayout(data, options);
+  } else {
+    renderScreenText(data?.text || "", options);
+  }
+}
+
+function leaveWindowLayout() {
+  const output = elements.screenOutput;
+  const wasLayout = output.classList.contains("window-layout");
+  output.classList.remove("window-layout");
+  delete output.dataset.layoutKey;
+  renderedPaneTexts.clear();
+  return wasLayout;
+}
+
+// Draw every pane of the selected pane's tmux window where tmux puts it, so the
+// view matches an attached terminal: splits, borders, zoom. Clicking a pane
+// makes it the input target without leaving the window.
+function renderWindowLayout(data, options = {}) {
+  const output = elements.screenOutput;
+  const previousTop = output.scrollTop;
+  const previousLeft = output.scrollLeft;
+  state.screenText = drawWindowLayout(output, data, Number(state.selectedWindowId), renderedPaneTexts);
+  output.setAttribute("aria-busy", "false");
+  output.dataset.paneId = hasSelectedWindow() ? String(state.selectedWindowId) : "";
+  if (options.scrollToTop) {
+    output.scrollTop = 0;
+  } else {
+    output.scrollTop = previousTop;
+    output.scrollLeft = previousLeft;
+  }
+  updateLatestOutputButton();
+}
+
+// Draw a tmux window into any output element; returns the selected pane's text.
+function drawWindowLayout(output, data, selectedId, paneTexts) {
+  const selected =
+    data.panes.find((pane) => Number(pane.id) === selectedId) || data.panes.find((pane) => pane.active) || data.panes[0];
+
+  const layoutKey = [
+    `${data.window.columns}x${data.window.rows}`,
+    ...data.panes.map((pane) => `${pane.id}:${pane.left},${pane.top},${pane.columns},${pane.rows}`)
+  ].join("|");
+  let container = output.querySelector(".tmux-window");
+  if (!container || output.dataset.layoutKey !== layoutKey || output.getAttribute("aria-busy") === "true") {
+    output.innerHTML = "";
+    paneTexts.clear();
+    container = document.createElement("div");
+    container.className = "tmux-window";
+    data.panes.forEach((pane) => {
+      const node = document.createElement("pre");
+      node.className = "tmux-pane";
+      node.dataset.layoutPaneId = String(pane.id);
+      node.style.left = `calc(${pane.left} * var(--cell-w))`;
+      node.style.top = `calc(${pane.top} * var(--cell-h))`;
+      node.style.width = `calc(${pane.columns} * var(--cell-w))`;
+      node.style.height = `calc(${pane.rows} * var(--cell-h))`;
+      container.appendChild(node);
+    });
+    output.appendChild(container);
+    output.dataset.layoutKey = layoutKey;
+  }
+  output.classList.add("window-layout");
+  const cell = measureCellSize(output);
+  container.style.setProperty("--cell-w", `${cell.width}px`);
+  container.style.setProperty("--cell-h", `${cell.height}px`);
+  container.style.width = `calc(${data.window.columns} * var(--cell-w))`;
+  container.style.height = `calc(${data.window.rows} * var(--cell-h))`;
+
+  data.panes.forEach((pane) => {
+    const node = container.querySelector(`[data-layout-pane-id="${pane.id}"]`);
+    if (!node) {
+      return;
+    }
+    const text = pane.text || "";
+    if (paneTexts.get(Number(pane.id)) !== text) {
+      node.innerHTML = renderTerminalText(text || " ");
+      paneTexts.set(Number(pane.id), text);
+    }
+    node.classList.toggle("selected", Number(pane.id) === selectedId);
+    node.classList.toggle("active", Boolean(pane.active));
+    node.title = `${pane.title || `Pane ${pane.id}`} · #${pane.id} · ${pane.columns}×${pane.rows}`;
+  });
+  return selected ? selected.text || "" : "";
+}
+
+// After a remote scroll only the selected pane's text changes; keep the layout.
+function renderScrolledPaneText(text, options = {}) {
+  const node = elements.screenOutput.querySelector(`.tmux-pane[data-layout-pane-id="${state.selectedWindowId}"]`);
+  if (!node || !elements.screenOutput.classList.contains("window-layout")) {
+    renderScreenText(text, options);
+    return;
+  }
+  const nextText = text || "";
+  state.screenText = nextText;
+  node.innerHTML = renderTerminalText(nextText || " ");
+  renderedPaneTexts.set(Number(state.selectedWindowId), nextText);
+  const cached = renderedScreen.data?.panes?.find((pane) => Number(pane.id) === Number(state.selectedWindowId));
+  if (cached) {
+    cached.text = nextText;
+  }
+  renderedScreen.text = nextText;
+  updateLatestOutputButton();
+}
+
 function renderScreenText(text, options = {}) {
   const output = elements.screenOutput;
   const previousTop = output.scrollTop;
   const wasNearBottom = isScreenOutputNearBottom();
   const nextText = text || "";
+  const wasLayout = leaveWindowLayout();
 
-  if (state.screenText !== nextText || output.getAttribute("aria-busy") === "true") {
+  if (wasLayout || state.screenText !== nextText || output.getAttribute("aria-busy") === "true") {
     state.screenText = nextText;
     output.innerHTML = renderTerminalText(state.screenText || "(current screen is empty)");
   }
   output.setAttribute("aria-busy", "false");
-  output.dataset.paneId = String(state.selectedWindowId || "");
+  output.dataset.paneId = hasSelectedWindow() ? String(state.selectedWindowId) : "";
 
-  if (state.screenExtent === "all") {
+  if (activeExtent() === "all") {
     if (options.scrollToBottom || state.allTextFollowTail || wasNearBottom) {
       output.scrollTop = output.scrollHeight;
       state.allTextFollowTail = true;
     } else {
       output.scrollTop = previousTop;
     }
+    updateLatestOutputButton();
     return;
   }
 
@@ -1084,23 +1368,50 @@ function renderScreenText(text, options = {}) {
   } else {
     setScreenOutputScrollTop(previousTop);
   }
+  updateLatestOutputButton();
+}
+
+function updateLatestOutputButton() {
+  const awayFromLatest =
+    activeExtent() === "all" ? !state.allTextFollowTail : viewportScrolledBack;
+  elements.latestOutputBtn.hidden = !hasSelectedWindow() || !awayFromLatest;
+}
+
+// Return to the live end: Screen mode scrolls the kitty viewport back to its end;
+// All mode resumes tailing the browser-side scrollback.
+async function jumpToLatestOutput() {
+  if (!state.selectedTargetId || !hasSelectedWindow()) {
+    return;
+  }
+
+  pendingScrollLines = 0;
+  if (activeExtent() === "all") {
+    state.allTextFollowTail = true;
+    updateLatestOutputButton();
+    await refreshScreen({ force: true, scrollToBottom: true });
+    return;
+  }
+
+  await scrollRemoteWindow(0, { toEnd: true });
 }
 
 function renderPaneLoading(windowId) {
   state.screenText = "";
+  leaveWindowLayout();
   elements.screenOutput.textContent = `Loading pane #${windowId}...`;
   elements.screenOutput.setAttribute("aria-busy", "true");
-  elements.screenOutput.dataset.paneId = String(windowId || "");
+  elements.screenOutput.dataset.paneId = String(windowId ?? "");
   elements.screenOutput.scrollTop = 0;
 }
 
 function handleScreenOutputScroll() {
-  if (state.screenExtent !== "all") {
+  if (activeExtent() !== "all") {
     return;
   }
 
   const wasFollowing = state.allTextFollowTail;
   state.allTextFollowTail = isScreenOutputNearBottom();
+  updateLatestOutputButton();
 
   if (wasFollowing && !state.allTextFollowTail) {
     setStatus("Browsing history · All auto refresh paused.", "neutral");
@@ -1200,6 +1511,17 @@ function renderSpecialKeyMenu() {
   });
 }
 
+function closeEditorMenu() {
+  elements.editorMenuPopover.hidden = true;
+  elements.editorMenuBtn.setAttribute("aria-expanded", "false");
+}
+
+function toggleEditorMenu() {
+  const shouldOpen = elements.editorMenuPopover.hidden;
+  elements.editorMenuPopover.hidden = !shouldOpen;
+  elements.editorMenuBtn.setAttribute("aria-expanded", String(shouldOpen));
+}
+
 function closeSpecialKeyMenu() {
   elements.specialKeyMenuPopover.hidden = true;
   elements.specialKeyMenuBtn.setAttribute("aria-expanded", "false");
@@ -1215,19 +1537,32 @@ function toggleSpecialKeyMenu(forceOpen = null) {
   elements.specialKeyMenuBtn.setAttribute("aria-expanded", String(shouldOpen));
 }
 
+// Chat-style composer: one row that grows with its content up to the panel height.
+function autosizeComposer() {
+  const input = elements.sendTextInput;
+  if (!input) {
+    return;
+  }
+  const maxHeight = state.bottomPanelHeight || PANEL_HEIGHT_RANGE.default;
+  input.style.height = "auto";
+  const contentHeight = input.scrollHeight;
+  input.style.height = `${Math.min(contentHeight, maxHeight)}px`;
+  input.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
+}
+
 function setComposerBusy(isBusy) {
   state.composerSending = Boolean(isBusy);
   elements.sendForm.classList.toggle("composer-busy", state.composerSending);
   elements.sendForm.setAttribute("aria-busy", String(state.composerSending));
   elements.sendTextBtn.disabled = state.composerSending;
-  elements.sendEnterBtn.disabled = state.composerSending;
+  elements.sendRawTextBtn.disabled = state.composerSending;
   elements.specialKeyMenuBtn.disabled = state.composerSending;
-  elements.attachImageHeadBtn.disabled = state.composerSending;
   elements.attachImageBtn.disabled = state.composerSending;
   elements.removeImageBtn.disabled = state.composerSending;
   elements.imageInput.disabled = state.composerSending;
   elements.sendTextInput.readOnly = state.composerSending;
-  elements.sendTextBtn.textContent = state.composerSending ? "Sending" : "Send";
+  elements.sendTextBtn.classList.toggle("is-sending", state.composerSending);
+  elements.sendTextBtn.setAttribute("aria-label", state.composerSending ? "Sending" : "Send");
   if (state.composerSending) {
     closeSpecialKeyMenu();
   }
@@ -1348,10 +1683,24 @@ function normalizeTransport(value) {
 
 function getTargetConnectionLabel(target) {
   const transport = normalizeTransport(target?.transport);
-  if (transport === "ssh") {
-    return target?.sshTarget || "SSH";
+  const base = transport === "ssh" ? target?.sshTarget || "SSH" : "Local";
+  return normalizeBackend(target?.backend) === "tmux" ? `${base} · tmux` : base;
+}
+
+function syncTargetBackendFormState(options = {}) {
+  const backend = normalizeBackend(elements.targetBackend.value);
+  const defaults = getBackendDefaults(backend);
+  const previous = getBackendDefaults(backend === "tmux" ? "kitty" : "tmux");
+  elements.targetKittyBinaryField.hidden = backend !== "kitty";
+  elements.targetTmuxBinaryField.hidden = backend !== "tmux";
+  elements.targetBackendSectionTitle.textContent = defaults.sectionTitle;
+  elements.targetBackendSectionHint.textContent = defaults.sectionHint;
+  elements.targetSocketPattern.placeholder = defaults.socketPlaceholder;
+  elements.targetDefaultSocket.placeholder = defaults.defaultSocketPlaceholder;
+  // Switching backends swaps an untouched socket pattern for the other default.
+  if (options.swapSocketPattern && elements.targetSocketPattern.value.trim() === previous.socketPattern) {
+    elements.targetSocketPattern.value = defaults.socketPattern;
   }
-  return "Local";
 }
 
 function syncTargetTransportFormState() {
@@ -1372,8 +1721,10 @@ function readTargetForm() {
     id: state.editingTargetId || undefined,
     name: elements.targetName.value.trim(),
     transport,
+    backend: normalizeBackend(elements.targetBackend.value),
     sshTarget: elements.targetSsh.value.trim(),
     kittyBinary: elements.targetKittyBinary.value.trim(),
+    tmuxBinary: elements.targetTmuxBinary.value.trim(),
     socketPattern: elements.targetSocketPattern.value.trim(),
     defaultSocket: elements.targetDefaultSocket.value.trim(),
     notes: elements.targetNotes.value.trim()
@@ -1387,11 +1738,14 @@ function writeTargetForm(target) {
   };
   elements.targetName.value = source.name || "";
   elements.targetTransport.value = normalizeTransport(source.transport);
+  elements.targetBackend.value = normalizeBackend(source.backend);
   elements.targetSsh.value = source.sshTarget || "";
   elements.targetKittyBinary.value = source.kittyBinary || DEFAULT_TARGET_FORM.kittyBinary;
-  elements.targetSocketPattern.value = source.socketPattern || DEFAULT_TARGET_FORM.socketPattern;
+  elements.targetTmuxBinary.value = source.tmuxBinary || DEFAULT_TARGET_FORM.tmuxBinary;
+  elements.targetSocketPattern.value = source.socketPattern || getBackendDefaults(source.backend).socketPattern;
   elements.targetDefaultSocket.value = source.defaultSocket || "";
   elements.targetNotes.value = source.notes || "";
+  syncTargetBackendFormState();
   syncTargetTransportFormState();
 }
 
@@ -1469,6 +1823,7 @@ function flattenWindows(tree) {
         flat.push({
           ...window,
           osWindowId: osWindow.id,
+          osWindowTitle: osWindow.title || "",
           tabId: tab.id,
           tabTitle: tab.title,
           tabLayout: tab.layout,
@@ -1507,9 +1862,9 @@ function getFirstWindowInOsWindow(osWindow) {
 }
 
 function getCreatePanelLabel(kind) {
-  if (kind === "tab") return "tab";
-  if (kind === "split") return "split";
-  return "window";
+  const labels = state.sessionLabels;
+  const text = kind === "tab" ? labels.createTab : kind === "split" ? labels.createSplit : labels.createWindow;
+  return text.replace(/^New\s+/i, "").toLowerCase();
 }
 
 function syncSessionCreateControls() {
@@ -1532,7 +1887,7 @@ async function createKittyPanel(kind, context = {}) {
   }
 
   if (state.sessionCreating) {
-    setStatus("A Kitty create action is already running.", "neutral");
+    setStatus("A create action is already running.", "neutral");
     return;
   }
 
@@ -1566,10 +1921,10 @@ async function createKittyPanel(kind, context = {}) {
     }
 
     await loadSessions({ forceRefresh: true, refreshPane: false });
-    if (result.windowId) {
+    if (result.windowId !== undefined && result.windowId !== null) {
       await selectWindow(result.windowId);
     }
-    setStatus(`Created new ${label} #${result.windowId || ""}.`, "success");
+    setStatus(`Created new ${label} #${result.windowId ?? ""}.`, "success");
   } finally {
     state.sessionCreating = false;
     syncSessionCreateControls();
@@ -1580,13 +1935,23 @@ async function selectWindow(windowId) {
   const nextWindowId = Number(windowId);
   const selectionChanged = Number(state.selectedWindowId) !== nextWindowId;
   state.selectedWindowId = nextWindowId;
+  if (selectionChanged) {
+    viewportScrolledBack = false;
+  }
+  rememberSelectedPane();
+  noteScreenActivity();
   if (isMobileViewport()) {
     state.previewVisible = false;
     state.previewPinned = false;
     setMobileScreen("chat");
   }
   invalidateScreenRequests();
-  if (selectionChanged) {
+  const layoutPane = elements.screenOutput.querySelector(`.tmux-pane[data-layout-pane-id="${nextWindowId}"]`);
+  if (selectionChanged && layoutPane) {
+    elements.screenOutput.querySelectorAll(".tmux-pane.selected").forEach((node) => node.classList.remove("selected"));
+    layoutPane.classList.add("selected");
+    state.screenText = renderedPaneTexts.get(nextWindowId) || "";
+  } else if (selectionChanged) {
     renderPaneLoading(nextWindowId);
   }
   renderSessions();
@@ -1595,8 +1960,530 @@ async function selectWindow(windowId) {
   applyUiState();
   await refreshScreen({
     force: true,
-    scrollToBottom: state.screenExtent === "screen" || (state.screenExtent === "all" && state.allTextFollowTail)
+    scrollToBottom: activeExtent() === "screen" || (activeExtent() === "all" && state.allTextFollowTail)
   });
+  scheduleAutoFit();
+}
+
+// --- tmux pane sizing -------------------------------------------------------
+// A tmux pane is as wide as its attached client, or 80x24 when it never had one,
+// so lines stop short of the browser. Detached panes are resized to the cells
+// that fit this view; attached ones only on request (see fitPaneToScreen).
+
+// Size of one terminal cell in the screen output, measured from a two-line probe
+// so the height is the real line box, not the glyph box.
+function measureCellSize(output = elements.screenOutput) {
+  const probe = document.createElement("pre");
+  probe.textContent = `${"M".repeat(50)}\n${"M".repeat(50)}`;
+  probe.style.cssText =
+    "position:absolute;visibility:hidden;white-space:pre;margin:0;padding:0;border:0;pointer-events:none;font:inherit;line-height:inherit;";
+  output.appendChild(probe);
+  const rect = probe.getBoundingClientRect();
+  output.removeChild(probe);
+  return { width: rect.width / 50, height: rect.height / 2 };
+}
+
+function measureScreenCells() {
+  const output = elements.screenOutput;
+  const cell = measureCellSize();
+  const style = getComputedStyle(output);
+  const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+  const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+  if (!cell.width || !cell.height || output.clientWidth === 0) {
+    return null;
+  }
+  return {
+    columns: clamp(Math.floor((output.clientWidth - padX) / cell.width), 20, 500),
+    rows: clamp(Math.floor((output.clientHeight - padY) / cell.height), 5, 300)
+  };
+}
+
+let autoFitTimer = null;
+
+function scheduleAutoFit() {
+  if (autoFitTimer) {
+    clearTimeout(autoFitTimer);
+  }
+  autoFitTimer = setTimeout(() => {
+    autoFitTimer = null;
+    if (state.autoFitPane) {
+      fitPaneToScreen().catch((error) => setStatus(error.message, "danger"));
+    }
+  }, 500);
+}
+
+async function fitPaneToScreen(options = {}) {
+  if (!state.selectedTargetId || !hasSelectedWindow()) {
+    return null;
+  }
+  if (state.sessionBackend !== "tmux") {
+    if (options.force) {
+      setStatus("Pane resize is only available for tmux targets.", "warning");
+    }
+    return null;
+  }
+  const pane = state.flatWindows.find((window) => Number(window.id) === Number(state.selectedWindowId));
+  const cells = measureScreenCells();
+  if (!pane || !cells) {
+    return null;
+  }
+  // Automatic mode never fights an attached terminal for the window size.
+  if (!options.force && (pane.is_attached || pane.osWindowFocused)) {
+    return null;
+  }
+  // Split panes share the window, so the window is what must match the view.
+  const windowColumns = pane.window_columns || pane.columns;
+  const windowLines = pane.window_lines || pane.lines;
+  if (!options.force && windowColumns === cells.columns && windowLines === cells.rows) {
+    return null;
+  }
+
+  const result = await apiFetch("/api/resize-window", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      targetId: state.selectedTargetId,
+      socket: state.selectedSocket || "",
+      windowId: state.selectedWindowId,
+      columns: cells.columns,
+      rows: cells.rows,
+      force: Boolean(options.force)
+    })
+  });
+
+  if (result.skipped) {
+    setStatus("Pane kept its size: a terminal is attached. Use Fit pane to screen in the ⋯ menu to override.", "neutral");
+    return result;
+  }
+
+  pane.window_columns = result.columns;
+  pane.window_lines = result.rows;
+  setStatus(
+    `Window resized to ${result.columns}×${result.rows}` +
+      (result.paneCount > 1 ? ` · ${result.paneCount} panes share it` : "") +
+      (result.manualSize ? " · window-size manual; the attached terminal now sees a fixed canvas." : "."),
+    "success"
+  );
+  await refreshScreen({ force: true, scrollToBottom: activeExtent() === "screen" || state.allTextFollowTail });
+  return result;
+}
+
+// --- browser-side view splits ----------------------------------------------
+// Modeled on deepseek-harness ui-layout: a device-local binary tree of views,
+// persisted per origin. The active leaf holds #screenOutput and all the
+// single-selection machinery; every other leaf is a read-only SecondaryViewer
+// that polls its own pane. Phones show only the active leaf.
+
+const leafSlots = new Map();
+const secondaryViewers = new Map();
+let paneTreeMobileMode = null;
+
+function currentActor() {
+  return {
+    targetId: state.selectedTargetId || null,
+    socket: state.selectedSocket || "",
+    windowId: hasSelectedWindow() ? Number(state.selectedWindowId) : null
+  };
+}
+
+function loadPaneLayout() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PANE_LAYOUT_STORAGE_KEY) || "null");
+    if (parsed) {
+      const layout = PANE_TREE.decodePersistedPaneLayout(parsed);
+      state.paneRoot = layout.paneRoot;
+      state.activePaneId = layout.activePaneId;
+    }
+  } catch (error) {
+    state.paneRoot = null;
+    state.activePaneId = null;
+  }
+}
+
+function savePaneLayout() {
+  try {
+    localStorage.setItem(
+      PANE_LAYOUT_STORAGE_KEY,
+      JSON.stringify({ paneVersion: 1, paneRoot: state.paneRoot, activePaneId: state.activePaneId })
+    );
+  } catch (error) {
+    // Storage can be unavailable; the layout then lasts for this page only.
+  }
+}
+
+function ensurePaneTree() {
+  if (!state.paneRoot || !PANE_TREE.hasPaneId(state.paneRoot, state.activePaneId)) {
+    if (!state.paneRoot) {
+      state.paneRoot = PANE_TREE.leaf(currentActor());
+    }
+    state.activePaneId = PANE_TREE.firstPaneId(state.paneRoot);
+  }
+}
+
+function activeLeaf() {
+  ensurePaneTree();
+  return PANE_TREE.findPane(state.paneRoot, state.activePaneId);
+}
+
+// The active leaf always mirrors the current selection.
+function syncActivePaneActor() {
+  ensurePaneTree();
+  state.paneRoot = PANE_TREE.replacePaneActor(state.paneRoot, state.activePaneId, currentActor());
+  savePaneLayout();
+  updateSlotHead(state.activePaneId);
+}
+
+function getLeafSlot(leafNode) {
+  let slot = leafSlots.get(leafNode.id);
+  if (slot) {
+    return slot;
+  }
+  slot = document.createElement("div");
+  slot.className = "pane-slot";
+  slot.dataset.paneId = leafNode.id;
+  slot.innerHTML = `
+    <div class="pane-slot-head">
+      <span class="pane-slot-title"></span>
+      <span class="pane-slot-actions">
+        <button class="pane-slot-button" type="button" data-pane-action="split-right" title="Split right" aria-label="Split right">◫</button>
+        <button class="pane-slot-button" type="button" data-pane-action="split-down" title="Split down" aria-label="Split down">⊟</button>
+        <button class="pane-slot-button" type="button" data-pane-action="close" title="Close view" aria-label="Close view">×</button>
+      </span>
+    </div>
+    <div class="pane-slot-body"></div>
+  `;
+  leafSlots.set(leafNode.id, slot);
+  return slot;
+}
+
+function applySplitRatio(element, ratio) {
+  element.style.setProperty("--first", `${ratio}fr`);
+  element.style.setProperty("--second", `${1 - ratio}fr`);
+}
+
+function buildPaneNode(node) {
+  if (node.kind === "leaf") {
+    return getLeafSlot(node);
+  }
+  const split = document.createElement("div");
+  split.className = `pane-split ${node.direction}`;
+  split.dataset.splitId = node.id;
+  applySplitRatio(split, node.ratio);
+  const divider = document.createElement("div");
+  divider.className = "pane-divider";
+  divider.setAttribute("role", "separator");
+  divider.setAttribute("aria-orientation", node.direction === "horizontal" ? "vertical" : "horizontal");
+  split.append(buildPaneNode(node.first), divider, buildPaneNode(node.second));
+  return split;
+}
+
+function destroySecondaryViewer(paneId) {
+  const viewer = secondaryViewers.get(paneId);
+  if (viewer) {
+    viewer.destroy();
+    secondaryViewers.delete(paneId);
+  }
+}
+
+function sameActor(a, b) {
+  return a.targetId === b.targetId && (a.socket || "") === (b.socket || "") && a.windowId === b.windowId;
+}
+
+function renderPaneTree() {
+  ensurePaneTree();
+  const container = elements.paneTree;
+  const leavesNow = PANE_TREE.leaves(state.paneRoot);
+  const liveIds = new Set(leavesNow.map((item) => item.id));
+  leafSlots.forEach((slot, id) => {
+    if (!liveIds.has(id)) {
+      destroySecondaryViewer(id);
+      leafSlots.delete(id);
+      slot.remove();
+    }
+  });
+
+  const mobile = isMobileViewport();
+  paneTreeMobileMode = mobile;
+  container.classList.toggle("single", leavesNow.length === 1);
+  container.classList.toggle("mobile", mobile);
+  const built = mobile ? getLeafSlot(activeLeaf()) : buildPaneNode(state.paneRoot);
+  container.replaceChildren(built);
+
+  const activeBody = leafSlots.get(state.activePaneId).querySelector(".pane-slot-body");
+  destroySecondaryViewer(state.activePaneId);
+  if (elements.screenOutput.parentElement !== activeBody) {
+    activeBody.replaceChildren(elements.screenOutput);
+  }
+
+  leavesNow.forEach((leafNode) => {
+    const slot = leafSlots.get(leafNode.id);
+    slot.classList.toggle("active", leafNode.id === state.activePaneId);
+    if (leafNode.id === state.activePaneId) {
+      return;
+    }
+    if (!slot.isConnected) {
+      destroySecondaryViewer(leafNode.id);
+      return;
+    }
+    const existing = secondaryViewers.get(leafNode.id);
+    if (existing && sameActor(existing.actor, leafNode.actor)) {
+      return;
+    }
+    destroySecondaryViewer(leafNode.id);
+    const output = document.createElement("pre");
+    output.className = "screen-output secondary-output";
+    slot.querySelector(".pane-slot-body").replaceChildren(output);
+    secondaryViewers.set(leafNode.id, new SecondaryViewer(leafNode.id, leafNode.actor, output));
+  });
+  leavesNow.forEach((leafNode) => updateSlotHead(leafNode.id));
+}
+
+function updateSlotHead(paneId) {
+  const slot = leafSlots.get(paneId);
+  const node = state.paneRoot ? PANE_TREE.findPane(state.paneRoot, paneId) : null;
+  if (!slot || !node) {
+    return;
+  }
+  const target = state.targets.find((item) => item.id === node.actor.targetId);
+  const paneTitle = paneId === state.activePaneId ? selectedPane()?.title || "" : secondaryViewers.get(paneId)?.title || "";
+  slot.querySelector(".pane-slot-title").textContent = [
+    target?.name || node.actor.targetId || "No target",
+    node.actor.windowId !== null ? `#${node.actor.windowId}` : "no pane",
+    paneTitle
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+class SecondaryViewer {
+  constructor(paneId, actor, output) {
+    this.paneId = paneId;
+    this.actor = actor;
+    this.output = output;
+    this.paneTexts = new Map();
+    this.hash = "";
+    this.title = "";
+    this.failures = 0;
+    this.timer = null;
+    this.destroyed = false;
+    this.output.textContent = "Loading view...";
+    this.poll();
+  }
+
+  schedule(delay) {
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.poll(), delay);
+  }
+
+  async poll() {
+    if (this.destroyed) {
+      return;
+    }
+    if (document.hidden || !this.output.isConnected) {
+      this.schedule(SECONDARY_VIEW_POLL_MS);
+      return;
+    }
+    if (!this.actor.targetId || this.actor.windowId === null) {
+      this.output.textContent = "No pane bound. Click this view, then pick a pane in the sidebar.";
+      return;
+    }
+    try {
+      const query = new URLSearchParams({
+        targetId: this.actor.targetId,
+        windowId: String(this.actor.windowId),
+        extent: "screen"
+      });
+      if (this.actor.socket) {
+        query.set("socket", this.actor.socket);
+      }
+      if (this.hash) {
+        query.set("since", this.hash);
+      }
+      const data = await apiFetch(`/api/screen?${query.toString()}`);
+      if (this.destroyed) {
+        return;
+      }
+      if (!data.unchanged) {
+        this.hash = data.hash || "";
+        this.draw(data);
+      }
+      this.failures = 0;
+    } catch (error) {
+      this.failures += 1;
+      this.hash = "";
+      this.output.classList.remove("window-layout");
+      delete this.output.dataset.layoutKey;
+      this.output.textContent = `View unavailable: ${error.message}`;
+    }
+    this.schedule(Math.min(SECONDARY_VIEW_POLL_MS * (1 + this.failures), 15000));
+  }
+
+  draw(data) {
+    if (Array.isArray(data.panes) && data.window) {
+      drawWindowLayout(this.output, data, this.actor.windowId, this.paneTexts);
+      const selected = data.panes.find((pane) => Number(pane.id) === this.actor.windowId);
+      this.title = selected?.title || "";
+    } else {
+      this.output.classList.remove("window-layout");
+      delete this.output.dataset.layoutKey;
+      this.output.innerHTML = renderTerminalText(data.text || "(current screen is empty)");
+    }
+    updateSlotHead(this.paneId);
+  }
+
+  destroy() {
+    this.destroyed = true;
+    clearTimeout(this.timer);
+    this.output.remove();
+  }
+}
+
+// Point the single-selection state at a view's pane, switching target when needed.
+async function bindSelectionToActor(actor) {
+  if (!actor.targetId || !state.targets.some((item) => item.id === actor.targetId)) {
+    setStatus("This view has no target; pick a pane in the sidebar to bind it.", "warning");
+    return;
+  }
+  if (actor.targetId !== state.selectedTargetId) {
+    state.selectedTargetId = actor.targetId;
+    state.editingTargetId = actor.targetId;
+    clearSessionSelection();
+    const target = getSelectedTarget();
+    writeTargetForm(target);
+    renderSavedTargets();
+    renderTargetSelect();
+    setTargetHealth("Switching", "neutral");
+    await apiFetch("/api/targets/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetId: actor.targetId })
+    });
+  } else if (
+    hasSelectedWindow() &&
+    Number(state.selectedWindowId) === actor.windowId &&
+    (state.selectedSocket || "") === (actor.socket || "")
+  ) {
+    return;
+  }
+  state.selectedSocket = actor.socket || "";
+  state.selectedWindowId = actor.windowId;
+  invalidateScreenRequests();
+  if (actor.windowId !== null) {
+    renderPaneLoading(actor.windowId);
+  }
+  await loadSessions({ forceRefresh: true, scrollToBottom: activeExtent() === "screen" });
+}
+
+async function activatePane(paneId, override = {}) {
+  const leafNode = PANE_TREE.findPane(state.paneRoot, paneId);
+  if (!leafNode) {
+    return;
+  }
+  if (paneId === state.activePaneId) {
+    if (override.windowId !== undefined && override.windowId !== Number(state.selectedWindowId)) {
+      await selectWindow(override.windowId);
+    }
+    return;
+  }
+  const actor = PANE_TREE.normalizeActor({ ...leafNode.actor, ...override });
+  state.paneRoot = PANE_TREE.replacePaneActor(state.paneRoot, paneId, actor);
+  state.activePaneId = paneId;
+  savePaneLayout();
+  renderPaneTree();
+  await bindSelectionToActor(actor);
+}
+
+async function splitActivePane(direction) {
+  const current = activeLeaf();
+  const { tree, newPaneId } = PANE_TREE.splitPane(state.paneRoot, current.id, direction, current.actor);
+  if (!newPaneId) {
+    setStatus("No room for another view.", "warning");
+    return;
+  }
+  state.paneRoot = tree;
+  savePaneLayout();
+  // The new view starts on the same pane and takes focus, so the next sidebar pick lands in it.
+  await activatePane(newPaneId);
+  setStatus("View split. Pick a pane in the sidebar to show it here.", "neutral");
+}
+
+async function closeViewPane(paneId) {
+  if (PANE_TREE.leaves(state.paneRoot).length <= 1) {
+    setStatus("The last view stays open.", "neutral");
+    return;
+  }
+  const wasActive = paneId === state.activePaneId;
+  state.paneRoot = PANE_TREE.closePane(state.paneRoot, paneId);
+  if (wasActive) {
+    state.activePaneId = PANE_TREE.firstPaneId(state.paneRoot);
+  }
+  savePaneLayout();
+  renderPaneTree();
+  if (wasActive) {
+    await bindSelectionToActor(activeLeaf().actor);
+  }
+}
+
+function handlePaneTreeClick(event) {
+  const action = event.target.closest?.("[data-pane-action]");
+  const slot = event.target.closest?.(".pane-slot");
+  if (!slot) {
+    return;
+  }
+  const paneId = slot.dataset.paneId;
+  if (action) {
+    event.preventDefault();
+    const kind = action.dataset.paneAction;
+    const run =
+      kind === "close"
+        ? closeViewPane(paneId)
+        : activatePane(paneId).then(() => splitActivePane(kind === "split-down" ? "vertical" : "horizontal"));
+    run.catch((error) => setStatus(error.message, "danger"));
+    return;
+  }
+  if (paneId === state.activePaneId || window.getSelection()?.toString()) {
+    return;
+  }
+  const layoutPane = event.target.closest?.(".tmux-pane");
+  const override = layoutPane ? { windowId: Number(layoutPane.dataset.layoutPaneId) } : {};
+  activatePane(paneId, override).catch((error) => setStatus(error.message, "danger"));
+}
+
+function handleDividerPointerDown(event) {
+  const divider = event.target.closest?.(".pane-divider");
+  if (!divider || event.button > 0) {
+    return;
+  }
+  const split = divider.parentElement;
+  const horizontal = split.classList.contains("horizontal");
+  event.preventDefault();
+  divider.setPointerCapture(event.pointerId);
+  divider.classList.add("dragging");
+  let ratio = null;
+  const move = (moveEvent) => {
+    const rect = split.getBoundingClientRect();
+    const raw = horizontal ? (moveEvent.clientX - rect.left) / rect.width : (moveEvent.clientY - rect.top) / rect.height;
+    ratio = clamp(raw, 0.2, 0.8);
+    applySplitRatio(split, ratio);
+  };
+  const finish = (endEvent) => {
+    divider.classList.remove("dragging");
+    divider.removeEventListener("pointermove", move);
+    divider.removeEventListener("pointerup", finish);
+    divider.removeEventListener("pointercancel", finish);
+    try {
+      divider.releasePointerCapture(endEvent.pointerId);
+    } catch (error) {
+      // Capture may already be gone.
+    }
+    if (ratio !== null) {
+      state.paneRoot = PANE_TREE.resizePaneSplit(state.paneRoot, split.dataset.splitId, ratio);
+      savePaneLayout();
+    }
+  };
+  divider.addEventListener("pointermove", move);
+  divider.addEventListener("pointerup", finish);
+  divider.addEventListener("pointercancel", finish);
 }
 
 function renderMobilePaneSwitcher() {
@@ -1612,7 +2499,7 @@ function renderMobilePaneSwitcher() {
       const selected = Number(windowInfo.id) === Number(state.selectedWindowId) ? "selected" : "";
       const title = [
         windowInfo.title || `Pane ${windowInfo.id}`,
-        windowInfo.tabTitle ? `Tab: ${windowInfo.tabTitle}` : "",
+        windowInfo.tabTitle ? `${state.sessionLabels.tab}: ${windowInfo.tabTitle}` : "",
         windowInfo.cwd || ""
       ].filter(Boolean).join(" · ");
       return `
@@ -1658,6 +2545,9 @@ function bindSessionCreateControls() {
 function renderSessions() {
   const totalWindows = state.flatWindows.length;
   const selectedTarget = getSelectedTarget();
+  const labels = state.sessionLabels;
+  // tmux sessions are created and arranged from the terminal; the deck only adds sessions.
+  const showNestedCreate = state.sessionBackend !== "tmux";
   const newWindowFooter = `
     <section class="os-window-create-block">
       <button
@@ -1666,19 +2556,19 @@ function renderSessions() {
         type="button"
         data-create-session="window"
       >
-        <span>New Window</span>
-        <small>Create OS Window #${state.sessionTree.length + 1}</small>
+        <span>${escapeHtml(labels.createWindow)}</span>
+        <small>Create ${escapeHtml(labels.osWindow.toLowerCase())} #${state.sessionTree.length + 1}</small>
       </button>
     </section>
   `;
 
   elements.sessionSummary.textContent = selectedTarget
-    ? `${selectedTarget.name} · ${state.sessionTree.length} OS windows / ${totalWindows} panes`
+    ? `${selectedTarget.name} · ${state.sessionTree.length} ${labels.osWindow.toLowerCase()}s / ${totalWindows} panes`
     : "Choose a target from the top selector, then connect.";
 
   if (!state.sessionTree.length) {
     elements.sessionTree.innerHTML = `
-      <div class="empty-note">No kitty session data yet. Click Connect to load sessions.</div>
+      <div class="empty-note">No session data yet. Click Connect to load sessions.</div>
       ${newWindowFooter}
     `;
     renderMobilePaneSwitcher();
@@ -1700,13 +2590,16 @@ function renderSessions() {
               const badges = [];
               if (window.is_active) badges.push("active");
               if (window.is_focused) badges.push("focused");
+              if (window.is_attached) badges.push("attached");
+              if (window.alternate_on) badges.push("alt-screen");
+              if (window.zoomed) badges.push("zoomed");
               if (window.at_prompt) badges.push("prompt");
 
               return `
                 <button class="pane-item ${activeClass}" type="button" data-window-id="${window.id}">
                   <div class="pane-item-head">
                     <strong>${escapeHtml(window.title || `Pane ${window.id}`)}</strong>
-                    <span>#${window.id}</span>
+                    <span>#${window.id} ${closeButtonMarkup("pane", window.id, window.title || `Pane ${window.id}`)}</span>
                   </div>
                   <p>${escapeHtml(window.cwd || "")}</p>
                   <small>${escapeHtml(getWindowProcessLabel(window))}</small>
@@ -1722,19 +2615,20 @@ function renderSessions() {
             <article class="tab-block">
               <div class="tab-head">
                 <div>
-                  <h4>${escapeHtml(tab.title || `Tab ${tab.id}`)}</h4>
+                  <h4>${escapeHtml(tab.title || `${labels.tab} ${tab.id}`)}</h4>
                   <small>${escapeHtml(tab.layout || "")}</small>
                 </div>
                 <div class="session-head-actions">
-                  <span>tab #${tab.id}</span>
-                  <button
+                  <span>${escapeHtml(labels.tab.toLowerCase())} #${tab.id}</span>
+                  ${closeButtonMarkup("tab", tab.id, tab.title || `${labels.tab} ${tab.id}`, (tab.windows || []).length)}
+                  ${showNestedCreate ? `<button
                     class="ghost-button session-create-button"
                     type="button"
                     data-create-session="split"
                     data-tab-id="${escapeAttribute(tab.id)}"
-                    data-source-window-id="${escapeAttribute(tabAnchor?.id || "")}"
+                    data-source-window-id="${escapeAttribute(tabAnchor ? tabAnchor.id : "")}"
                     ${splitCreateDisabled}
-                  >New Split</button>
+                  >${escapeHtml(labels.createSplit)}</button>` : ""}
                 </div>
               </div>
               <div class="pane-grid">${windows}</div>
@@ -1747,19 +2641,24 @@ function renderSessions() {
         <section class="os-window-block">
           <div class="os-window-head">
             <div>
-              <h3>OS Window #${osWindow.id}</h3>
-              <small>${osWindow.is_focused ? "focused now" : "background window"}</small>
+              <h3>${escapeHtml(osWindow.title ? `${labels.osWindow} ${osWindow.title}` : `${labels.osWindow} #${osWindow.id}`)}</h3>
+              <small>${osWindow.title
+                ? (osWindow.is_focused ? "attached" : "detached")
+                : (osWindow.is_focused ? "focused now" : "background window")}</small>
             </div>
             <div class="session-head-actions">
-              <span>${(osWindow.tabs || []).length} tabs</span>
-              <button
+              <span>${(osWindow.tabs || []).length} ${escapeHtml(labels.tab.toLowerCase())}s</span>
+              ${state.sessionBackend === "tmux"
+                ? closeButtonMarkup("session", osWindow.id, osWindow.title || `#${osWindow.id}`, countOsWindowPanes(osWindow))
+                : ""}
+              ${showNestedCreate ? `<button
                 class="ghost-button session-create-button"
                 type="button"
                 data-create-session="tab"
                 data-os-window-id="${escapeAttribute(osWindow.id)}"
-                data-source-window-id="${escapeAttribute(osWindowAnchor?.id || "")}"
+                data-source-window-id="${escapeAttribute(osWindowAnchor ? osWindowAnchor.id : "")}"
                 ${tabCreateDisabled}
-              >New Tab</button>
+              >${escapeHtml(labels.createTab)}</button>` : ""}
             </div>
           </div>
           ${tabs}
@@ -1771,8 +2670,8 @@ function renderSessions() {
   elements.sessionTree.innerHTML = `${markup}${newWindowFooter}`;
 
   elements.sessionTree.querySelectorAll("[data-window-id]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      if (Date.now() < suppressSessionClickUntil) {
+    button.addEventListener("click", async (event) => {
+      if (event.target.closest("[data-close-kind]") || Date.now() < suppressSessionClickUntil) {
         return;
       }
       await selectWindow(button.dataset.windowId);
@@ -1783,13 +2682,71 @@ function renderSessions() {
   bindSessionCreateControls();
 }
 
+function countOsWindowPanes(osWindow) {
+  return (osWindow.tabs || []).reduce((total, tab) => total + (tab.windows || []).length, 0);
+}
+
+// The close control lives inside the pane button, so it is a span, not a button.
+function closeButtonMarkup(kind, id, title, paneCount = 1) {
+  return `<span
+    class="session-close-button"
+    role="button"
+    tabindex="0"
+    aria-label="Close ${escapeAttribute(title)}"
+    title="Close ${escapeAttribute(title)}"
+    data-close-kind="${kind}"
+    data-close-id="${escapeAttribute(id)}"
+    data-close-title="${escapeAttribute(title)}"
+    data-close-panes="${paneCount}"
+  >×</span>`;
+}
+
+async function handleSessionCloseClick(event) {
+  const control = event.target.closest?.("[data-close-kind]");
+  if (!control) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  if (!state.selectedTargetId) {
+    return;
+  }
+  const kind = control.dataset.closeKind;
+  const labels = state.sessionLabels;
+  const kindLabel = { session: labels.osWindow, tab: labels.tab, pane: "pane" }[kind] || kind;
+  const panes = Number(control.dataset.closePanes) || 1;
+  const verb = state.sessionBackend === "tmux" ? "Kill" : "Close";
+  const question =
+    `${verb} ${kindLabel.toLowerCase()} "${control.dataset.closeTitle}"?` +
+    (panes > 1 ? ` ${panes} panes and their processes will be closed.` : " Its process will be closed.");
+  if (!window.confirm(question)) {
+    return;
+  }
+  try {
+    await apiFetch("/api/close-panel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        targetId: state.selectedTargetId,
+        socket: state.selectedSocket || "",
+        kind,
+        id: Number(control.dataset.closeId)
+      })
+    });
+    setStatus(`${kindLabel} "${control.dataset.closeTitle}" closed.`, "success");
+    await loadSessions();
+  } catch (error) {
+    setStatus(error.message, "danger");
+  }
+}
+
 function getSessionPaneFromEvent(event) {
   return event.target.closest?.("[data-window-id]") || null;
 }
 
 function handleSessionPointerDown(event) {
   const pane = getSessionPaneFromEvent(event);
-  if (!pane || !["touch", "pen"].includes(event.pointerType)) {
+  if (!pane || event.target.closest?.("[data-close-kind]") || !["touch", "pen"].includes(event.pointerType)) {
     sessionPointerStart = null;
     return;
   }
@@ -2035,7 +2992,9 @@ function clearSessionSelection() {
   renderSessions();
   renderViewerMeta();
   renderImageAttachment();
-  elements.screenOutput.textContent = "Waiting for a kitty pane...";
+  state.sessionLabels = labelsForTarget(getSelectedTarget());
+  state.sessionBackend = normalizeBackend(getSelectedTarget()?.backend);
+  elements.screenOutput.textContent = "Waiting for a pane...";
   updateStatusBar();
 }
 
@@ -2081,6 +3040,9 @@ async function testTargetRequest(requestBody) {
   });
 
   setTargetHealth("Connection OK", "success");
+  if (result.labels) {
+    state.sessionLabels = result.labels;
+  }
   renderSocketOptions(result.sockets || [], result.selectedSocket || "");
   state.selectedSocket = result.selectedSocket || "";
   setStatus(
@@ -2113,7 +3075,7 @@ async function connectSelectedTarget(options = {}) {
     targetId: state.selectedTargetId,
     socket: state.selectedSocket || ""
   });
-  await loadSessions({ forceRefresh: true, scrollToBottom: state.screenExtent === "all" });
+  await loadSessions({ forceRefresh: true, scrollToBottom: activeExtent() === "all" });
   if (isMobileViewport()) {
     setMobileScreen("sessions");
   }
@@ -2149,28 +3111,34 @@ async function loadSessions(options = {}) {
   const previousWindowId = state.selectedWindowId;
   const deferPaneRefresh = isMobileViewport() && state.mobileScreen !== "chat";
   state.sessionTree = data.tree || [];
+  state.sessionLabels = data.labels || labelsForTarget(getSelectedTarget());
+  state.sessionBackend = normalizeBackend(data.backend || getSelectedTarget()?.backend);
   state.flatWindows = flattenWindows(state.sessionTree);
   state.selectedSocket = data.selectedSocket || "";
   renderSocketOptions(data.sockets || [], state.selectedSocket);
 
-  if (deferPaneRefresh && state.selectedWindowId) {
+  const restoredWindowId = hasSelectedWindow() ? null : findRestorablePane(capturedTargetId);
+  if (restoredWindowId !== null) {
+    state.selectedWindowId = restoredWindowId;
+  } else if (deferPaneRefresh && state.selectedWindowId) {
     if (!state.flatWindows.some((window) => Number(window.id) === Number(state.selectedWindowId))) {
       state.selectedWindowId = null;
     }
-  } else if (!deferPaneRefresh && !state.selectedWindowId && state.flatWindows[0]) {
+  } else if (!deferPaneRefresh && !hasSelectedWindow() && state.flatWindows[0]) {
     state.selectedWindowId = Number(state.flatWindows[0].id);
   } else if (
     !deferPaneRefresh &&
-    state.selectedWindowId &&
+    hasSelectedWindow() &&
     !state.flatWindows.some((window) => Number(window.id) === Number(state.selectedWindowId))
   ) {
     state.selectedWindowId = state.flatWindows[0] ? Number(state.flatWindows[0].id) : null;
   }
 
   const selectedWindowChanged = Number(previousWindowId) !== Number(state.selectedWindowId);
+  rememberSelectedPane();
   if (selectedWindowChanged) {
     invalidateScreenRequests();
-    if (state.selectedWindowId && !deferPaneRefresh) {
+    if (hasSelectedWindow() && !deferPaneRefresh) {
       renderPaneLoading(state.selectedWindowId);
     }
   }
@@ -2181,17 +3149,17 @@ async function loadSessions(options = {}) {
   updateStatusBar();
   sendClientDebug("loadSessions:rendered", null, { force: true });
 
-  if (state.selectedWindowId && !deferPaneRefresh) {
+  if (hasSelectedWindow() && !deferPaneRefresh) {
     if (options.refreshPane !== false) {
       await refreshScreen({
         force: Boolean(options.forceRefresh),
-        scrollToBottom: Boolean(options.scrollToBottom || (selectedWindowChanged && state.screenExtent === "screen"))
+        scrollToBottom: Boolean(options.scrollToBottom || (selectedWindowChanged && activeExtent() === "screen"))
       });
     } else if (selectedWindowChanged) {
       state.screenText = "";
       elements.screenOutput.textContent = "The current pane changed. Click Refresh to update content.";
     }
-  } else if (!state.selectedWindowId) {
+  } else if (!hasSelectedWindow()) {
     elements.screenOutput.textContent = deferPaneRefresh
       ? "Select a session before loading pane content."
       : "No pane is available to display.";
@@ -2199,7 +3167,7 @@ async function loadSessions(options = {}) {
 }
 
 async function refreshScreen(options = {}) {
-  if (!state.selectedTargetId || !state.selectedWindowId) {
+  if (!state.selectedTargetId || !hasSelectedWindow()) {
     return;
   }
 
@@ -2207,7 +3175,7 @@ async function refreshScreen(options = {}) {
     return;
   }
 
-  if (state.screenExtent === "all" && !state.allTextFollowTail && !options.force) {
+  if (activeExtent() === "all" && !state.allTextFollowTail && !options.force) {
     setStatus("Browsing history · All auto refresh paused.", "neutral");
     return;
   }
@@ -2216,7 +3184,7 @@ async function refreshScreen(options = {}) {
   const capturedTargetId = state.selectedTargetId;
   const capturedSocket = state.selectedSocket;
   const capturedWindowId = state.selectedWindowId;
-  const capturedExtent = state.screenExtent;
+  const capturedExtent = activeExtent();
   if (screenAbortController) {
     screenAbortController.abort();
   }
@@ -2235,6 +3203,17 @@ async function refreshScreen(options = {}) {
       query.set("socket", capturedSocket);
     }
 
+    const screenKey = `${capturedTargetId}|${capturedSocket}|${capturedWindowId}|${capturedExtent}`;
+    // Loading/error placeholders clear state.screenText, which disables the shortcut.
+    const canSkipUnchanged =
+      renderedScreen.key === screenKey &&
+      state.screenText !== "" &&
+      renderedScreen.text === state.screenText &&
+      elements.screenOutput.getAttribute("aria-busy") !== "true";
+    if (canSkipUnchanged && renderedScreen.hash) {
+      query.set("since", renderedScreen.hash);
+    }
+
     const data = await apiFetch(`/api/screen?${query.toString()}`, {
       signal: requestController.signal
     });
@@ -2243,9 +3222,18 @@ async function refreshScreen(options = {}) {
       capturedTargetId === state.selectedTargetId &&
       capturedSocket === state.selectedSocket &&
       Number(capturedWindowId) === Number(state.selectedWindowId) &&
-      capturedExtent === state.screenExtent
+      capturedExtent === activeExtent()
     ) {
-      renderScreenText(data.text || "", options);
+      if (data.unchanged && canSkipUnchanged) {
+        renderScreenData(renderedScreen.data || { text: state.screenText }, options);
+      } else {
+        const nextText = data.text || "";
+        if (renderedScreen.key === screenKey && nextText !== state.screenText) {
+          noteScreenActivity();
+        }
+        renderScreenData(data, options);
+        renderedScreen = { key: screenKey, hash: data.hash || "", text: state.screenText, data };
+      }
     }
   } catch (error) {
     if (error?.name === "AbortError") {
@@ -2259,6 +3247,7 @@ async function refreshScreen(options = {}) {
       Number(capturedWindowId) === Number(state.selectedWindowId)
     ) {
       state.screenText = "";
+      leaveWindowLayout();
       elements.screenOutput.textContent = `Pane #${capturedWindowId} could not be loaded. Click Refresh to try again.`;
       elements.screenOutput.setAttribute("aria-busy", "false");
       elements.screenOutput.dataset.paneId = String(capturedWindowId);
@@ -2287,7 +3276,7 @@ function wheelDeltaToLines(event) {
 }
 
 function queueRemoteScrollLines(lines) {
-  if (!state.selectedTargetId || !state.selectedWindowId) {
+  if (!state.selectedTargetId || !hasSelectedWindow()) {
     setStatus("Select a pane first.", "warning");
     return false;
   }
@@ -2303,7 +3292,7 @@ function queueRemoteScrollLines(lines) {
 }
 
 function queueRemoteScrollFromWheel(event) {
-  if (state.screenExtent !== "screen") {
+  if (activeExtent() !== "screen") {
     return;
   }
 
@@ -2329,7 +3318,7 @@ function handleScreenTouchStart(event) {
 }
 
 function handleScreenTouchMove(event) {
-  if (state.screenExtent !== "screen" || !screenTouchScroll || event.touches.length !== 1) {
+  if (activeExtent() !== "screen" || !screenTouchScroll || event.touches.length !== 1) {
     return;
   }
 
@@ -2377,7 +3366,8 @@ async function flushRemoteScroll() {
   }
 }
 
-async function scrollRemoteWindow(lines) {
+async function scrollRemoteWindow(lines, options = {}) {
+  const toEnd = Boolean(options.toEnd);
   const requestSerial = ++screenRequestSerial;
   const capturedTargetId = state.selectedTargetId;
   const capturedSocket = state.selectedSocket;
@@ -2392,7 +3382,8 @@ async function scrollRemoteWindow(lines) {
         targetId: capturedTargetId,
         socket: capturedSocket,
         windowId: capturedWindowId,
-        lines
+        lines,
+        toEnd
       })
     });
 
@@ -2401,10 +3392,20 @@ async function scrollRemoteWindow(lines) {
       capturedTargetId === state.selectedTargetId &&
       capturedSocket === state.selectedSocket &&
       Number(capturedWindowId) === Number(state.selectedWindowId) &&
-      state.screenExtent === "screen"
+      activeExtent() === "screen"
     ) {
-      renderScreenText(data.text || "");
-      setStatus(`Scrolled pane #${state.selectedWindowId} by ${Math.abs(lines)} lines.`, "success");
+      if (toEnd) {
+        viewportScrolledBack = false;
+      } else if (lines < 0) {
+        viewportScrolledBack = true;
+      }
+      renderScrolledPaneText(data.text || "", toEnd ? { scrollToBottom: true } : {});
+      setStatus(
+        toEnd
+          ? `Pane #${state.selectedWindowId} is showing its latest output.`
+          : `Scrolled pane #${state.selectedWindowId} by ${Math.abs(lines)} lines.`,
+        "success"
+      );
     }
   } finally {
     if (requestSerial === screenRequestSerial) {
@@ -2414,7 +3415,7 @@ async function scrollRemoteWindow(lines) {
 }
 
 async function sendText(options = {}) {
-  if (!state.selectedTargetId || !state.selectedWindowId) {
+  if (!state.selectedTargetId || !hasSelectedWindow()) {
     setStatus("Select a pane first.", "warning");
     return false;
   }
@@ -2446,6 +3447,8 @@ async function sendText(options = {}) {
     "success"
   );
   elements.sendTextInput.value = "";
+  autosizeComposer();
+  noteScreenActivity();
   if (isPaneStillSelected(pane)) {
     await refreshScreen({ scrollToBottom: true });
   }
@@ -2453,7 +3456,7 @@ async function sendText(options = {}) {
 }
 
 async function sendImageAttachment(options = {}) {
-  if (!state.selectedTargetId || !state.selectedWindowId) {
+  if (!state.selectedTargetId || !hasSelectedWindow()) {
     setStatus("Select a pane first.", "warning");
     return false;
   }
@@ -2489,7 +3492,9 @@ async function sendImageAttachment(options = {}) {
     "success"
   );
   elements.sendTextInput.value = "";
+  autosizeComposer();
   clearImageAttachment();
+  noteScreenActivity();
   if (isPaneStillSelected(pane)) {
     await refreshScreen({ scrollToBottom: true });
   }
@@ -2520,12 +3525,12 @@ async function runComposerAction(action) {
   }
 }
 
-async function sendComposerKey(key) {
-  return runComposerAction(() => sendKey(key));
+async function sendComposerKey(key, repeat = 1) {
+  return runComposerAction(() => sendKey(key, repeat));
 }
 
-async function sendKey(key) {
-  if (!state.selectedTargetId || !state.selectedWindowId) {
+async function sendKey(key, repeat = 1) {
+  if (!state.selectedTargetId || !hasSelectedWindow()) {
     setStatus("Select a pane first.", "warning");
     return;
   }
@@ -2538,18 +3543,20 @@ async function sendKey(key) {
       targetId: pane.targetId,
       socket: pane.socket,
       windowId: pane.windowId,
-      key
+      key,
+      repeat
     })
   });
 
-  setStatus(`Sent key ${key} to pane #${pane.windowId}.`, "success");
+  setStatus(`Sent key ${key}${repeat > 1 ? ` ×${repeat}` : ""} to pane #${pane.windowId}.`, "success");
+  noteScreenActivity();
   if (isPaneStillSelected(pane)) {
     await refreshScreen({ scrollToBottom: true });
   }
 }
 
 async function focusWindow() {
-  if (!state.selectedTargetId || !state.selectedWindowId) {
+  if (!state.selectedTargetId || !hasSelectedWindow()) {
     setStatus("Select a pane first.", "warning");
     return;
   }
@@ -2594,6 +3601,7 @@ async function setScreenExtent(extent) {
   }
 
   state.screenExtent = nextExtent;
+  state.screenExtentExplicit = true;
   state.allTextFollowTail = true;
   invalidateScreenRequests();
   pendingScrollLines = 0;
@@ -2620,40 +3628,104 @@ function resetTargetDraft() {
   setStatus("Creating a new target. Save it to make it available in the top selector.", "neutral");
 }
 
-function restartPolling() {
+function stopPolling() {
+  pollGeneration += 1;
   if (pollTimer) {
-    clearInterval(pollTimer);
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function getPollDelayMs() {
+  const quietFor = Date.now() - lastScreenActivityAt;
+  if (quietFor < POLL_ACTIVE_WINDOW_MS) {
+    return POLL_ACTIVE_MS;
+  }
+  if (quietFor < POLL_WARM_WINDOW_MS) {
+    return POLL_WARM_MS;
+  }
+  return POLL_IDLE_MS;
+}
+
+function schedulePoll(delayMs) {
+  if (pollTimer) {
+    clearTimeout(pollTimer);
   }
 
-  if (!state.autoRefresh) {
-    return;
-  }
-
-  autoRefreshTick = 0;
-  pollTimer = setInterval(async () => {
-    if (!state.selectedTargetId) {
+  const generation = pollGeneration;
+  pollTimer = setTimeout(async () => {
+    pollTimer = null;
+    if (generation !== pollGeneration) {
       return;
     }
 
-    try {
-      await runAutoRefreshTick();
-    } catch (error) {
-      setStatus(error.message, "danger");
-      setTargetHealth("Connection issue", "danger");
+    if (state.selectedTargetId && !document.hidden) {
+      pollInFlight = true;
+      try {
+        await runAutoRefreshTick();
+      } catch (error) {
+        setStatus(error.message, "danger");
+        setTargetHealth("Connection issue", "danger");
+      } finally {
+        pollInFlight = false;
+      }
     }
-  }, AUTO_REFRESH_MS);
+
+    // Hidden pages stop here; the visibilitychange handler resumes polling.
+    if (generation === pollGeneration && !document.hidden) {
+      schedulePoll(getPollDelayMs());
+    }
+  }, delayMs);
+}
+
+function restartPolling() {
+  stopPolling();
+
+  if (!state.autoRefresh || !state.authenticated) {
+    return;
+  }
+
+  lastTreeRefreshAt = Date.now();
+  lastAllTextRefreshAt = Date.now();
+  schedulePoll(getPollDelayMs());
+}
+
+// Called when the pane output changes or input is sent: speeds polling back up.
+function noteScreenActivity() {
+  lastScreenActivityAt = Date.now();
+  if (pollTimer && state.autoRefresh) {
+    schedulePoll(POLL_ACTIVE_MS);
+  }
+}
+
+function handleVisibilityChange() {
+  if (document.hidden) {
+    if (pollTimer) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+    return;
+  }
+
+  // An in-flight tick reschedules itself once it finishes.
+  if (state.autoRefresh && state.authenticated && !pollTimer && !pollInFlight) {
+    schedulePoll(0);
+  }
 }
 
 async function runAutoRefreshTick() {
-  autoRefreshTick += 1;
-  const refreshTree = autoRefreshTick % SESSION_TREE_REFRESH_EVERY_TICKS === 0 || !state.flatWindows.length;
+  const now = Date.now();
+  const refreshTree = now - lastTreeRefreshAt >= SESSION_TREE_REFRESH_MS || !state.flatWindows.length;
+  if (refreshTree) {
+    lastTreeRefreshAt = now;
+  }
 
-  if (!state.selectedWindowId) {
+  if (!hasSelectedWindow()) {
     await loadSessions({ forceRefresh: true });
     return;
   }
 
-  if (state.screenExtent === "all") {
+  if (activeExtent() === "all") {
     if (!state.allTextFollowTail) {
       if (refreshTree) {
         await loadSessions({ refreshPane: false });
@@ -2662,12 +3734,13 @@ async function runAutoRefreshTick() {
       return;
     }
 
-    if (autoRefreshTick % ALL_TEXT_AUTO_REFRESH_EVERY_TICKS !== 0) {
+    if (now - lastAllTextRefreshAt < ALL_TEXT_AUTO_REFRESH_MS) {
       if (refreshTree) {
         await loadSessions({ refreshPane: false });
       }
       return;
     }
+    lastAllTextRefreshAt = now;
   }
 
   if (refreshTree) {
@@ -2834,6 +3907,7 @@ function attachEvents() {
   });
 
   elements.targetTransport.addEventListener("change", syncTargetTransportFormState);
+  elements.targetBackend.addEventListener("change", () => syncTargetBackendFormState({ swapSocketPattern: true }));
 
   elements.reloadTargetsBtn.addEventListener("click", async () => {
     try {
@@ -2899,13 +3973,17 @@ function attachEvents() {
 
   elements.refreshTextBtn.addEventListener("click", async () => {
     try {
-      if (state.screenExtent === "all") {
+      if (activeExtent() === "all") {
         state.allTextFollowTail = true;
       }
-      await refreshScreen({ force: true, scrollToBottom: state.screenExtent === "all" });
+      await refreshScreen({ force: true, scrollToBottom: activeExtent() === "all" });
     } catch (error) {
       setStatus(error.message, "danger");
     }
+  });
+
+  elements.latestOutputBtn.addEventListener("click", () => {
+    jumpToLatestOutput().catch((error) => setStatus(error.message, "danger"));
   });
 
   elements.screenModeBtn.addEventListener("click", async () => {
@@ -2945,7 +4023,7 @@ function attachEvents() {
 
   elements.reloadSessionsBtn.addEventListener("click", async () => {
     try {
-      await loadSessions({ forceRefresh: true, scrollToBottom: state.screenExtent === "all" });
+      await loadSessions({ forceRefresh: true, scrollToBottom: activeExtent() === "all" });
     } catch (error) {
       setTargetHealth("Refresh failed", "danger");
       setStatus(error.message, "danger");
@@ -2954,7 +4032,7 @@ function attachEvents() {
 
   elements.reloadSessionTreeBtn.addEventListener("click", async () => {
     try {
-      await loadSessions({ forceRefresh: true, scrollToBottom: state.screenExtent === "all" });
+      await loadSessions({ forceRefresh: true, scrollToBottom: activeExtent() === "all" });
     } catch (error) {
       setTargetHealth("Refresh failed", "danger");
       setStatus(error.message, "danger");
@@ -2978,7 +4056,7 @@ function attachEvents() {
         body: JSON.stringify({ targetId: state.selectedTargetId })
       });
       setStatus(`Switched to ${target.name}.`, "neutral");
-      await loadSessions({ forceRefresh: true, scrollToBottom: state.screenExtent === "all" });
+      await loadSessions({ forceRefresh: true, scrollToBottom: activeExtent() === "all" });
       if (isMobileViewport()) {
         setMobileScreen("sessions");
       }
@@ -2992,7 +4070,7 @@ function attachEvents() {
     invalidateSessionRequests();
     state.selectedSocket = elements.socketSelect.value;
     try {
-      await loadSessions({ forceRefresh: true, scrollToBottom: state.screenExtent === "all" });
+      await loadSessions({ forceRefresh: true, scrollToBottom: activeExtent() === "all" });
     } catch (error) {
       setTargetHealth("Switch failed", "danger");
       setStatus(error.message, "danger");
@@ -3002,6 +4080,24 @@ function attachEvents() {
   elements.sidebarResizeHandle.addEventListener("pointerdown", (event) => startResize("sidebar", event));
   elements.panelResizeHandle.addEventListener("pointerdown", (event) => startResize("panel", event));
   elements.browserResizeHandle.addEventListener("pointerdown", (event) => startResize("browser", event));
+  elements.sessionTree.addEventListener("click", (event) => {
+    handleSessionCloseClick(event).catch((error) => setStatus(error.message, "danger"));
+  });
+  elements.sessionTree.addEventListener("keydown", (event) => {
+    if ((event.key === "Enter" || event.key === " ") && event.target.closest?.("[data-close-kind]")) {
+      handleSessionCloseClick(event).catch((error) => setStatus(error.message, "danger"));
+    }
+  });
+  elements.screenOutput.addEventListener("click", async (event) => {
+    const paneNode = event.target.closest?.(".tmux-pane");
+    if (!paneNode || window.getSelection()?.toString()) {
+      return;
+    }
+    const paneId = Number(paneNode.dataset.layoutPaneId);
+    if (paneId !== Number(state.selectedWindowId)) {
+      await selectWindow(paneId);
+    }
+  });
   elements.sessionTree.addEventListener("pointerdown", handleSessionPointerDown);
   elements.sessionTree.addEventListener("pointerup", (event) => {
     handleSessionPointerUp(event).catch((error) => setStatus(error.message, "danger"));
@@ -3068,22 +4164,24 @@ function attachEvents() {
     if (!elements.specialKeyMenu.contains(event.target)) {
       closeSpecialKeyMenu();
     }
+    if (!elements.editorMenu.contains(event.target)) {
+      closeEditorMenu();
+    }
+  });
+  elements.editorMenuBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleEditorMenu();
   });
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !elements.editorMenuPopover.hidden) {
+      closeEditorMenu();
+    }
     if (event.key === "Escape" && !elements.specialKeyMenuPopover.hidden) {
       closeSpecialKeyMenu();
       elements.specialKeyMenuBtn.focus();
     }
   });
   window.addEventListener("message", handleBrowserMessage);
-
-  elements.sendEnterBtn.addEventListener("click", async () => {
-    try {
-      await sendComposerKey("enter");
-    } catch (error) {
-      setStatus(error.message, "danger");
-    }
-  });
 
   elements.specialKeyMenuBtn.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -3103,7 +4201,7 @@ function attachEvents() {
 
     try {
       closeSpecialKeyMenu();
-      await sendComposerKey(item.key);
+      await sendComposerKey(item.key, item.repeat || 1);
     } catch (error) {
       setStatus(error.message, "danger");
     }
@@ -3112,13 +4210,20 @@ function attachEvents() {
   elements.sendForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      await sendComposerPayload();
+      await sendComposerShortcut();
     } catch (error) {
       setStatus(error.message, "danger");
     }
   });
 
-  elements.attachImageHeadBtn.addEventListener("click", openImagePicker);
+  elements.sendRawTextBtn.addEventListener("click", async () => {
+    try {
+      await sendComposerPayload({ appendNewline: false });
+    } catch (error) {
+      setStatus(error.message, "danger");
+    }
+  });
+
   elements.attachImageBtn.addEventListener("click", openImagePicker);
 
   elements.imageInput.addEventListener("change", async () => {
@@ -3136,6 +4241,7 @@ function attachEvents() {
     setStatus("Pending image removed.", "neutral");
   });
 
+  elements.sendTextInput.addEventListener("input", autosizeComposer);
   elements.sendTextInput.addEventListener("paste", async (event) => {
     const file = getImageFileFromDataTransfer(event.clipboardData);
     if (!file) {
@@ -3177,6 +4283,16 @@ function attachEvents() {
   });
 
   elements.sendTextInput.addEventListener("keydown", async (event) => {
+    if (COMPOSER_UTILS.shouldSendWithoutEnterOnKeydown(event)) {
+      event.preventDefault();
+      try {
+        await sendComposerPayload({ appendNewline: false });
+      } catch (error) {
+        setStatus(error.message, "danger");
+      }
+      return;
+    }
+
     if (!COMPOSER_UTILS.shouldSubmitOnKeydown(event)) {
       return;
     }
@@ -3190,6 +4306,62 @@ function attachEvents() {
     }
   });
 
+  elements.autoFitToggle.addEventListener("change", () => {
+    state.autoFitPane = elements.autoFitToggle.checked;
+    saveUiPreferences();
+    if (state.autoFitPane) {
+      scheduleAutoFit();
+    }
+  });
+
+  elements.fitPaneBtn.addEventListener("click", async () => {
+    closeEditorMenu();
+    try {
+      await fitPaneToScreen({ force: true });
+    } catch (error) {
+      setStatus(error.message, "danger");
+    }
+  });
+
+  elements.zoomPaneBtn.addEventListener("click", async () => {
+    closeEditorMenu();
+    if (!state.selectedTargetId || !hasSelectedWindow() || state.sessionBackend !== "tmux") {
+      setStatus("Pane zoom is only available for tmux targets.", "warning");
+      return;
+    }
+    try {
+      const result = await apiFetch("/api/toggle-zoom", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          targetId: state.selectedTargetId,
+          socket: state.selectedSocket || "",
+          windowId: state.selectedWindowId
+        })
+      });
+      setStatus(result.zoomed ? `Pane #${state.selectedWindowId} zoomed.` : "Window unzoomed; split layout restored.", "neutral");
+      await loadSessions();
+      await refreshScreen({ force: true });
+    } catch (error) {
+      setStatus(error.message, "danger");
+    }
+  });
+
+  elements.splitRightBtn.addEventListener("click", () => {
+    closeEditorMenu();
+    splitActivePane("horizontal").catch((error) => setStatus(error.message, "danger"));
+  });
+  elements.splitDownBtn.addEventListener("click", () => {
+    closeEditorMenu();
+    splitActivePane("vertical").catch((error) => setStatus(error.message, "danger"));
+  });
+  elements.closeViewBtn.addEventListener("click", () => {
+    closeEditorMenu();
+    closeViewPane(state.activePaneId).catch((error) => setStatus(error.message, "danger"));
+  });
+  elements.paneTree.addEventListener("click", handlePaneTreeClick);
+  elements.paneTree.addEventListener("pointerdown", handleDividerPointerDown);
+
   elements.autoRefreshToggle.addEventListener("change", () => {
     state.autoRefresh = elements.autoRefreshToggle.checked;
     applyUiState();
@@ -3199,12 +4371,22 @@ function attachEvents() {
   window.addEventListener("resize", () => {
     document.documentElement.style.setProperty("--sidebar-width", `${getEffectiveSidebarWidth()}px`);
     document.documentElement.style.setProperty("--browser-width", `${getEffectiveBrowserWidth()}px`);
+    if (paneTreeMobileMode !== null && paneTreeMobileMode !== isMobileViewport()) {
+      renderPaneTree();
+    }
+    scheduleAutoFit();
   });
+  // Sidebar, browser drawer and bottom panel drags change the output box without a window resize.
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(() => scheduleAutoFit()).observe(elements.screenOutput);
+  }
   window.addEventListener("popstate", handleMobileHistoryChange);
+  document.addEventListener("visibilitychange", handleVisibilityChange);
 }
 
 async function bootAuthenticatedWorkspace() {
   await loadTargets();
+  renderPaneTree();
   state.mobileScreen = "connect";
   if (isMobileViewport()) {
     state.activeSidebarView = "ssh";
@@ -3231,6 +4413,8 @@ async function init() {
   renderSpecialKeyMenu();
   attachEvents();
   attachWheelContainment();
+  loadPaneLayout();
+  renderPaneTree();
 
   const authenticated = await checkAuthStatus();
   if (authenticated) {

@@ -26,7 +26,7 @@
   --activity-width: 54px;
   --sidebar-width: 320px;
   --browser-width: clamp(360px, 38vw, 760px);
-  --bottom-panel-height: 230px;
+  --bottom-panel-height: 150px;
   --topbar-height: 44px;
   --statusbar-height: 24px;
   --radius: 6px;
@@ -517,7 +517,7 @@ button {
   min-height: 0;
   position: relative;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) 0 var(--bottom-panel-height);
+  grid-template-rows: minmax(0, 1fr) 0 auto;
   background: var(--editor-bg);
   overflow: hidden;
 }
@@ -556,7 +556,7 @@ button {
 }
 
 .app-shell.resize-enabled .editor-region {
-  grid-template-rows: minmax(0, 1fr) 6px var(--bottom-panel-height);
+  grid-template-rows: minmax(0, 1fr) 6px auto;
 }
 
 .editor-pane {
@@ -604,6 +604,66 @@ button {
   overflow: hidden;
 }
 
+/* View options menu (text extent, auto-refresh, refresh) behind a single ⋯ button. */
+.editor-menu {
+  position: relative;
+  z-index: 1;
+}
+
+.editor-menu-button {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.editor-menu-popover {
+  position: absolute;
+  z-index: 80;
+  right: 0;
+  top: calc(100% + 8px);
+  width: min(260px, calc(100vw - 24px));
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--chrome-bg-strong);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.36);
+}
+
+.editor-menu-popover[hidden] {
+  display: none;
+}
+
+.editor-menu-popover .editor-mode-control {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.editor-menu-popover .special-key-group-label {
+  margin: 0;
+}
+
+.editor-menu-hint {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.editor-menu-toggle {
+  color: var(--text);
+}
+
+.editor-menu-item {
+  justify-content: flex-start;
+  min-height: 32px;
+}
+
 .compact-editor-button {
   min-height: 30px;
   padding: 5px 9px;
@@ -614,16 +674,47 @@ button {
   min-width: 0;
   min-height: 0;
   margin: 0;
-  padding: 14px 16px;
+  padding: 20px 5% 24px;
   overflow: auto;
   background: var(--editor-bg);
   color: var(--text);
   font-family: var(--mono);
   font-size: 0.92rem;
-  line-height: 1.55;
+  /* Tight enough that box-drawing borders and TUI rows read as continuous. */
+  line-height: 1.25;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   border: 0;
+  overscroll-behavior: contain;
   touch-action: auto;
+}
+
+.latest-output-button {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  z-index: 2;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--chrome-bg-strong);
+  color: var(--text-strong);
+  box-shadow: var(--shadow);
+}
+
+.latest-output-button:hover {
+  background: var(--hover-bg);
+}
+
+/* Rule and spinner rows stay one clipped line instead of wrapping into several. */
+.terminal-decoration {
+  display: inline-block;
+  max-width: 100%;
+  height: 1lh;
+  overflow: hidden;
+  white-space: pre;
+  vertical-align: top;
 }
 
 .terminal-link {
@@ -641,41 +732,85 @@ button {
   position: relative;
   z-index: 6;
   display: grid;
-  grid-template-rows: 34px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   border-top: 1px solid var(--line);
   background: var(--panel-bg);
   overflow: visible;
-}
-
-.bottom-panel .panel-head {
-  align-items: center;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--line);
-}
-
-.compact-panel-head .section-kicker {
-  margin: 0;
-}
-
-.compact-panel-head {
-  justify-content: flex-start;
-}
-
-.panel-mini-actions {
-  flex: 0 0 auto;
-  margin-left: 8px;
-  color: var(--muted);
-  font-size: 0.78rem;
 }
 
 .send-form {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  padding: 10px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  padding: 6px 10px 10px;
   overflow: visible;
+}
+
+/* Chat-style composer: a rounded field with the Send button inside it. */
+.chat-input-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  padding: 5px 5px 5px 14px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--field-bg);
+}
+
+.chat-input-row:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.chat-input-row textarea {
+  min-height: 24px;
+  max-height: var(--bottom-panel-height);
+  padding: 5px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  line-height: 1.4;
+  overflow-y: hidden;
+}
+
+.chat-input-row textarea:focus {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.chat-send-button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.send-icon {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.chat-send-button.is-sending .send-icon {
+  animation: send-pulse 0.9s ease-in-out infinite;
+}
+
+@keyframes send-pulse {
+  0%, 100% { opacity: 1; transform: translateY(0); }
+  50% { opacity: 0.35; transform: translateY(-3px); }
 }
 
 .send-form.dragging-image {
@@ -752,31 +887,43 @@ button {
   height: 30px;
 }
 
-.console-actions {
-  width: 112px;
-  display: grid;
-  grid-template-columns: 1fr;
-  align-content: start;
-  gap: 8px;
-  overflow: visible;
-}
-
 .special-key-menu {
   position: relative;
   z-index: 1;
   min-width: 0;
 }
 
-.key-menu-button {
-  width: 100%;
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px 6px;
+}
+
+.composer-tool-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.composer-tool-button.image-action-button {
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
 }
 
 .special-key-popover {
   position: absolute;
   z-index: 80;
-  right: 0;
+  left: 0;
   bottom: calc(100% + 8px);
-  width: min(280px, calc(100vw - 28px));
+  width: min(300px, calc(100vw - 28px));
   max-height: min(420px, 70vh);
   overflow: auto;
   padding: 10px;
@@ -831,7 +978,7 @@ button {
   color: var(--text-strong);
 }
 
-.console-actions button:disabled,
+.chat-send-button:disabled,
 .image-remove-button:disabled {
   opacity: 0.55;
   cursor: wait;
@@ -1383,16 +1530,6 @@ textarea:disabled {
   pointer-events: none;
 }
 
-.panel-image-button {
-  display: inline-grid;
-  min-height: 30px;
-  height: 30px;
-}
-
-.mobile-image-action-button {
-  display: none;
-}
-
 .status-pill,
 .status-panel {
   border: 1px solid var(--line);
@@ -1702,7 +1839,7 @@ textarea::-webkit-scrollbar-thumb:hover {
     --activity-width: 50px;
     --sidebar-width: min(280px, 36vw);
     --browser-width: clamp(320px, 36vw, 620px);
-    --bottom-panel-height: 240px;
+    --bottom-panel-height: 160px;
   }
 
   .topbar {
@@ -1715,10 +1852,6 @@ textarea::-webkit-scrollbar-thumb:hover {
 
   .brand-block .eyebrow {
     display: none;
-  }
-
-  .console-actions {
-    width: 96px;
   }
 
   .preview-drawer {
@@ -1951,7 +2084,7 @@ textarea::-webkit-scrollbar-thumb:hover {
     gap: 5px;
   }
 
-  .editor-tools .toggle,
+  .editor-tools > .toggle,
   .compact-editor-button {
     display: none;
   }
@@ -1976,9 +2109,9 @@ textarea::-webkit-scrollbar-thumb:hover {
   }
 
   .screen-output {
-    padding: 12px;
+    padding: 12px 16px 24px;
     font-size: 0.86rem;
-    line-height: 1.5;
+    line-height: 1.05;
     white-space: pre-wrap;
     overflow-x: hidden;
     overflow-wrap: anywhere;
@@ -1994,57 +2127,14 @@ textarea::-webkit-scrollbar-thumb:hover {
     position: relative;
     grid-row: 2;
     height: auto;
-    min-height: calc(132px + env(safe-area-inset-bottom, 0px));
     border-top: 1px solid var(--line);
     border-radius: 0;
     box-shadow: none;
     transform: none;
   }
 
-  .bottom-panel .panel-head {
-    display: none;
-  }
-
-  .mobile-image-action-button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    min-width: 0;
-    order: 1;
-  }
-
-  .special-key-menu {
-    order: 2;
-  }
-
-  #sendEnterBtn {
-    order: 3;
-  }
-
-  #sendTextBtn {
-    order: 4;
-  }
-
   .send-form {
-    grid-template-rows: 64px 34px;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 8px;
-    padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px));
-  }
-
-  .send-form.has-image-attachment {
-    grid-template-rows: minmax(124px, auto) 34px;
-  }
-
-  .bottom-panel.has-image-attachment {
-    min-height: calc(198px + env(safe-area-inset-bottom, 0px));
-  }
-
-  #sendTextInput {
-    height: 64px;
-    min-height: 64px;
-    max-height: 64px;
+    padding: 6px 8px calc(8px + env(safe-area-inset-bottom, 0px));
   }
 
   .image-attachment {
@@ -2057,28 +2147,12 @@ textarea::-webkit-scrollbar-thumb:hover {
     height: 38px;
   }
 
-  .console-actions {
-    width: auto;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    align-content: stretch;
-    gap: 5px;
-  }
-
-  .console-actions .primary-button,
-  .console-actions .ghost-button {
-    min-width: 0;
-    min-height: 34px;
-    padding: 0 4px;
-    font-size: 0.78rem;
-    line-height: 1;
-    white-space: nowrap;
-  }
-
   .special-key-popover {
     position: fixed;
     z-index: 90;
     right: max(8px, env(safe-area-inset-right, 0px));
-    bottom: calc(48px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(92px + env(safe-area-inset-bottom, 0px));
+    top: auto;
     left: max(8px, env(safe-area-inset-left, 0px));
     width: auto;
     max-height: min(420px, calc(100dvh - 72px));
@@ -2202,4 +2276,185 @@ textarea::-webkit-scrollbar-thumb:hover {
     min-width: 28px;
     padding: 0 6px;
   }
+}
+
+/* --- tmux window layout: panes drawn where tmux puts them ------------------ */
+.screen-output.window-layout {
+  padding: 10px 12px 24px;
+  overflow: auto;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.tmux-window {
+  --cell-w: 8px;
+  --cell-h: 18px;
+  position: relative;
+  min-width: 0;
+}
+
+.tmux-pane {
+  position: absolute;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  white-space: pre;
+  font: inherit;
+  line-height: inherit;
+  color: inherit;
+  background: transparent;
+  /* tmux leaves one cell between panes; the outline sits in that gap. */
+  outline: 1px solid var(--line);
+  outline-offset: 1px;
+  cursor: pointer;
+}
+
+.tmux-pane.active:not(.selected) {
+  outline-color: var(--line-strong);
+}
+
+.tmux-pane.selected {
+  outline-color: var(--accent);
+  cursor: default;
+}
+
+.session-close-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 4px;
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.session-close-button:hover,
+.session-close-button:focus-visible {
+  color: var(--danger);
+  background: var(--hover-bg);
+  outline: none;
+}
+
+/* --- browser-side view splits ------------------------------------------- */
+.pane-tree {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.pane-split {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  --first: 1fr;
+  --second: 1fr;
+}
+
+.pane-split.horizontal {
+  grid-template-columns: var(--first) 6px var(--second);
+}
+
+.pane-split.vertical {
+  grid-template-rows: var(--first) 6px var(--second);
+}
+
+.pane-divider {
+  background: var(--line);
+  touch-action: none;
+  cursor: col-resize;
+}
+
+.pane-split.vertical > .pane-divider {
+  cursor: row-resize;
+}
+
+.pane-divider:hover,
+.pane-divider.dragging {
+  background: var(--accent);
+}
+
+.pane-slot {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.pane-slot-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 26px;
+  padding: 0 6px 0 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--chrome-bg);
+  color: var(--muted);
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+
+.pane-slot.active .pane-slot-head {
+  color: var(--text-strong);
+  box-shadow: inset 0 2px 0 var(--accent);
+  cursor: default;
+}
+
+.pane-tree.single .pane-slot-head {
+  display: none;
+}
+
+.pane-slot-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-slot-actions {
+  display: inline-flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.pane-slot-button {
+  width: 24px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pane-slot-button:hover {
+  color: var(--text-strong);
+  background: var(--hover-bg);
+}
+
+.pane-tree.mobile .pane-slot-button[data-pane-action^="split"] {
+  display: none;
+}
+
+.pane-slot-body {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.secondary-output {
+  cursor: pointer;
+  opacity: 0.9;
+}
+
+.secondary-output:hover {
+  opacity: 1;
 }

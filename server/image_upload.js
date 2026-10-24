@@ -7,7 +7,7 @@ const { spawn } = require("child_process");
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const IMAGE_UPLOAD_DIR_ENV = "KRD_IMAGE_UPLOAD_DIR";
-const DEFAULT_IMAGE_UPLOAD_SUBDIR = path.join("Pictures", "voxpress");
+const DEFAULT_IMAGE_UPLOAD_SUBDIR = path.join("Pictures", "remote-deck");
 const ALLOWED_IMAGE_TYPES = new Map([
   ["image/png", ".png"],
   ["image/jpeg", ".jpg"],
@@ -79,8 +79,10 @@ function createUploadName(fileName, mimeType) {
   return `${stamp}-${nonce}-${stem}${ext}`;
 }
 
+// A plain Markdown link, not `![...]`: a leading exclamation mark switches
+// Codex's composer into shell mode.
 function createMarkdownImageReference(fileName, fileUrl) {
-  return `![${safeAltText(fileName)}](${fileUrl})`;
+  return `[${safeAltText(fileName)}](${fileUrl})`;
 }
 
 function createComposerImageText({ text = "", fileName, fileUrl }) {
@@ -141,7 +143,7 @@ if len(data) > max_bytes:
     raise SystemExit("Image is too large.")
 upload_root = os.environ.get("KRD_IMAGE_UPLOAD_DIR", "").strip()
 if not upload_root:
-    upload_root = os.path.join(os.path.expanduser("~"), "Pictures", "voxpress")
+    upload_root = os.path.join(os.path.expanduser("~"), "Pictures", "remote-deck")
 else:
     upload_root = os.path.expanduser(upload_root)
 root = os.path.join(upload_root, os.environ.get("KRD_UPLOAD_DATE", ""))

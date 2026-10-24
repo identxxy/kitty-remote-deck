@@ -14,10 +14,22 @@ function normalizeTransport(value) {
   throw new Error(`Unsupported target transport: ${value}`);
 }
 
+function normalizeBackend(value) {
+  const backend = String(value || "kitty").trim().toLowerCase();
+
+  if (backend === "kitty" || backend === "tmux") {
+    return backend;
+  }
+
+  throw new Error(`Unsupported target backend: ${value}`);
+}
+
 function createCommandPayload(target, payload) {
   return {
     ...payload,
+    backend: normalizeBackend(target.backend),
     kittyBinary: target.kittyBinary,
+    tmuxBinary: target.tmuxBinary,
     socketPattern: target.socketPattern,
     defaultSocket: target.defaultSocket
   };
@@ -128,6 +140,7 @@ async function runKittyAction(target, action, payload, options = {}) {
 
 module.exports = {
   createKittyInvocation,
+  normalizeBackend,
   normalizeTransport,
   runKittyAction,
   runInvocation

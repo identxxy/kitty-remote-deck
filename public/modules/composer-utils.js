@@ -1,17 +1,30 @@
 (function attachComposerUtils(global) {
   const SPECIAL_KEY_GROUPS = [
     {
+      // Shift+Left answers Codex questions; Shift+Tab cycles Claude Code's permission modes.
+      label: "Agent",
+      keys: [
+        { id: "shift-left", label: "Shift+←", key: "shift+left" },
+        { id: "alt-up", label: "Alt+↑", key: "alt+up" },
+        { id: "shift-tab", label: "Shift+Tab", key: "shift+tab" }
+      ]
+    },
+    {
       label: "Interrupt",
       keys: [
         { id: "escape", label: "Esc", key: "escape" },
         { id: "tab", label: "Tab", key: "tab" },
         { id: "ctrl-c", label: "Ctrl+C", key: "ctrl+c" },
-        { id: "ctrl-d", label: "Ctrl+D", key: "ctrl+d" }
+        { id: "ctrl-d", label: "Ctrl+D", key: "ctrl+d" },
+        // Claude Code exits on a second Ctrl+D within a short window; send both at once.
+        { id: "ctrl-d-twice", label: "Ctrl+D ×2", key: "ctrl+d", repeat: 2 }
       ]
     },
     {
       label: "Line editing",
       keys: [
+        { id: "backspace", label: "Backspace", key: "backspace" },
+        { id: "delete", label: "Delete", key: "delete" },
         { id: "ctrl-a", label: "Ctrl+A", key: "ctrl+a" },
         { id: "ctrl-e", label: "Ctrl+E", key: "ctrl+e" },
         { id: "ctrl-k", label: "Ctrl+K", key: "ctrl+k" },
@@ -52,7 +65,13 @@
   }
 
   function shouldSubmitOnKeydown(event) {
-    return event.key === "Enter" && !event.shiftKey && !event.isComposing;
+    return event.key === "Enter" && !event.shiftKey && !event.altKey && !event.isComposing;
+  }
+
+  // Alt+Enter types the composer text into the pane without pressing Enter,
+  // for filling a prompt that the user will finish by hand.
+  function shouldSendWithoutEnterOnKeydown(event) {
+    return event.key === "Enter" && event.altKey && !event.shiftKey && !event.isComposing;
   }
 
   const api = {
@@ -60,6 +79,7 @@
     flattenSpecialKeys,
     getSpecialKeyById,
     getEnterAction,
+    shouldSendWithoutEnterOnKeydown,
     shouldSubmitOnKeydown
   };
 

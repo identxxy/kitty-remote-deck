@@ -55,3 +55,30 @@ test("ssh invocation keeps the existing ssh helper path", () => {
   assert.match(invocation.args[1], /^python3 - 'list_sessions' '/);
   assert.equal(invocation.stdin, "helper source");
 });
+
+test("backend defaults to kitty and accepts tmux", () => {
+  assert.equal(runner.normalizeBackend(), "kitty");
+  assert.equal(runner.normalizeBackend("kitty"), "kitty");
+  assert.equal(runner.normalizeBackend("tmux"), "tmux");
+  assert.throws(() => runner.normalizeBackend("screen"), /Unsupported target backend/);
+});
+
+test("invocation payload carries the backend and tmux binary", () => {
+  const invocation = createKittyInvocation(
+    {
+      transport: "local",
+      backend: "tmux",
+      tmuxBinary: "/usr/bin/tmux",
+      socketPattern: "",
+      defaultSocket: ""
+    },
+    "list_sessions",
+    { socket: "" },
+    "helper source"
+  );
+
+  const payload = JSON.parse(Buffer.from(invocation.args[2], "base64").toString("utf8"));
+  assert.equal(payload.backend, "tmux");
+  assert.equal(payload.tmuxBinary, "/usr/bin/tmux");
+  assert.equal(payload.socketPattern, "");
+});

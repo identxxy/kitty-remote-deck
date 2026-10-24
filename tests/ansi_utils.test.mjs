@@ -42,3 +42,30 @@ test("ANSI renderer strips unsupported OSC control sequences", () => {
 
   assert.equal(html, "before after");
 });
+
+test("ANSI renderer only links previewable OSC 8 schemes", () => {
+  const unsafe = renderAnsiTerminalText("\x1b]8;;javascript:alert(1)\x07click\x1b]8;;\x07");
+  const safe = renderAnsiTerminalText("\x1b]8;;https://example.com\x07docs\x1b]8;;\x07");
+
+  assert.equal(unsafe, "click");
+  assert.match(safe, /<a class="terminal-link"[^>]* href="https:\/\/example.com"[^>]*>docs<\/a>/);
+  assert.match(safe, /rel="noopener noreferrer"/);
+});
+
+test("ANSI renderer marks rule and spinner rows as decoration", () => {
+  const html = renderAnsiTerminalText("text\n  ──────\n⠋⠙ \nmixed ── text");
+
+  assert.equal(
+    html,
+    'text\n<span class="terminal-decoration">  ──────</span>\n<span class="terminal-decoration">⠋⠙ </span>\nmixed ── text'
+  );
+});
+
+test("ANSI renderer keeps styles across marked line boundaries", () => {
+  const html = renderAnsiTerminalText("\x1b[31mred\n───\x1b[0m");
+
+  assert.equal(
+    html,
+    '<span style="color: #cd3131">red</span>\n<span class="terminal-decoration"><span style="color: #cd3131">───</span></span>'
+  );
+});
