@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The active split view is raised: it lifts 3 px with an accent ring and drop shadow (transform and shadow only, no layout or text movement), with a short settle animation on activation and none under `prefers-reduced-motion`. It also sits on a slightly lighter, accent-tinted background; secondary views keep the plain editor background at full opacity (the old dimming is gone).
 - With the composer empty, the arrow keys and `Esc` go straight to the pane (`↑ ↓ ← →` as tmux `Up`/`Down`/`Left`/`Right`, `Esc` as `Escape`), so agent menus, prompt history and interrupting the agent can be driven from the keyboard without opening the Keys menu. Typed text, modifiers and IME composition keep the browser's own cursor movement.
 - View slots now own their output element permanently. Activating a view no longer moves `#screenOutput` into that slot and re-renders both sides; it only changes which element the selection, composer and sidebar act on, so nothing in the layout shifts and every view keeps its scroll position. Secondary views follow the page's text mode (`All` or `Screen`) with the same incremental rendering and line deltas as the active view, and the split containers are rebuilt only when a view is split or closed.
 - Secondary views use the same `scroll-panel` styling as the active view (stable scrollbar gutter), so activating a view no longer shifts its text by the scrollbar width.
