@@ -43,7 +43,7 @@ http://localhost:3040
 4. `Enter` in the composer:
    - sends text if the textbox has content
    - sends `Enter` if the textbox is empty
-5. `Shift+Enter` inserts a newline in the composer.
+5. `Shift+Enter` inserts a newline in the composer. Arrow keys and `Esc` on an empty composer are sent to the pane (`getPassthroughKeyOnKeydown` in `composer-utils.js`).
 6. Terminal `http://`, `https://`, and `file://` URLs are clickable and open in the right-side Browser drawer. Browser address input, forward/back history, in-frame links, and GET forms are fetched through the active target and proxied through `/api/url-resource`.
 
 ## Verification

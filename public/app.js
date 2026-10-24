@@ -4779,6 +4779,17 @@ function attachEvents() {
   });
 
   elements.sendTextInput.addEventListener("keydown", async (event) => {
+    const passthroughKey = COMPOSER_UTILS.getPassthroughKeyOnKeydown(event, elements.sendTextInput.value);
+    if (passthroughKey) {
+      event.preventDefault();
+      try {
+        await sendKey(passthroughKey);
+      } catch (error) {
+        setStatus(error.message, "danger");
+      }
+      return;
+    }
+
     if (COMPOSER_UTILS.shouldSendWithoutEnterOnKeydown(event)) {
       event.preventDefault();
       try {

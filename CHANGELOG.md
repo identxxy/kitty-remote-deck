@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- With the composer empty, the arrow keys and `Esc` go straight to the pane (`↑ ↓ ← →` as tmux `Up`/`Down`/`Left`/`Right`, `Esc` as `Escape`), so agent menus, prompt history and interrupting the agent can be driven from the keyboard without opening the Keys menu. Typed text, modifiers and IME composition keep the browser's own cursor movement.
 - View slots now own their output element permanently. Activating a view no longer moves `#screenOutput` into that slot and re-renders both sides; it only changes which element the selection, composer and sidebar act on, so nothing in the layout shifts and every view keeps its scroll position. Secondary views follow the page's text mode (`All` or `Screen`) with the same incremental rendering and line deltas as the active view, and the split containers are rebuilt only when a view is split or closed.
 - Secondary views use the same `scroll-panel` styling as the active view (stable scrollbar gutter), so activating a view no longer shifts its text by the scrollbar width.
 - Fixed saved UI preferences being discarded on every load: an invalid assignment in the preference loader threw, so font size, theme, auto-fit and text mode always reverted to defaults. Font size chosen with `A-`/`A+` now survives reloads.

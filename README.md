@@ -16,7 +16,7 @@ Current release: `v0.2.1`.
 - In Screen mode, scrolls locally first, then scrolls the selected kitty pane through remote control when the local text view is already at the top or bottom edge.
 - Turns `http://`, `https://`, `file://`, and terminal OSC 8 hyperlinks in output into preview links.
 - Opens an embedded right-side Browser with back/forward navigation, history, an address bar, optional pinning, and proxied HTML, CSS, images, fonts, media resources, and relative links through the selected Local or SSH target.
-- Sends text, `Enter`, and special keys such as `Esc`, `Tab`, `Ctrl+C`, `Ctrl+D`, line-editing shortcuts, and arrow keys to the selected pane.
+- Sends text, `Enter`, and special keys such as `Esc`, `Tab`, `Ctrl+C`, `Ctrl+D`, line-editing shortcuts, and arrow keys to the selected pane. While the composer is empty, pressing an arrow key or `Esc` sends it to the pane directly; `Enter` on an empty composer sends `Enter`.
 - Persists UI preferences such as sidebar state and font size in the browser.
 
 ## Requirements

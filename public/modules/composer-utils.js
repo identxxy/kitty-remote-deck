@@ -74,8 +74,27 @@
     return event.key === "Enter" && event.altKey && !event.shiftKey && !event.isComposing;
   }
 
+  const PASSTHROUGH_KEYS = {
+    ArrowUp: "up",
+    ArrowDown: "down",
+    ArrowLeft: "left",
+    ArrowRight: "right",
+    Escape: "escape"
+  };
+
+  // With nothing typed, the arrow keys have no text to move through and Esc has
+  // nothing to cancel, so they go to the pane instead: menu navigation, prompt
+  // history, and interrupting the agent.
+  function getPassthroughKeyOnKeydown(event, text) {
+    if (String(text || "").length > 0 || event.isComposing || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) {
+      return null;
+    }
+    return PASSTHROUGH_KEYS[event.key] || null;
+  }
+
   const api = {
     SPECIAL_KEY_GROUPS,
+    getPassthroughKeyOnKeydown,
     flattenSpecialKeys,
     getSpecialKeyById,
     getEnterAction,

@@ -8,6 +8,7 @@ const {
   flattenSpecialKeys,
   getSpecialKeyById,
   shouldSendWithoutEnterOnKeydown,
+  getPassthroughKeyOnKeydown,
   shouldSubmitOnKeydown
 } = composerUtils;
 
@@ -47,4 +48,18 @@ test("special key lookup returns kitty key payloads", () => {
   assert.equal(getSpecialKeyById("shift-left").key, "shift+left");
   assert.equal(getSpecialKeyById("alt-up").key, "alt+up");
   assert.equal(getSpecialKeyById("missing"), null);
+});
+
+test("arrow keys and Esc pass through to the pane only while the composer is empty and unmodified", () => {
+  const key = (name, overrides = {}) => ({ key: name, shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, isComposing: false, ...overrides });
+  assert.equal(getPassthroughKeyOnKeydown(key("ArrowUp"), ""), "up");
+  assert.equal(getPassthroughKeyOnKeydown(key("ArrowDown"), ""), "down");
+  assert.equal(getPassthroughKeyOnKeydown(key("ArrowLeft"), ""), "left");
+  assert.equal(getPassthroughKeyOnKeydown(key("ArrowRight"), ""), "right");
+  assert.equal(getPassthroughKeyOnKeydown(key("ArrowUp"), "draft"), null);
+  assert.equal(getPassthroughKeyOnKeydown(key("ArrowUp", { shiftKey: true }), ""), null);
+  assert.equal(getPassthroughKeyOnKeydown(key("ArrowUp", { isComposing: true }), ""), null);
+  assert.equal(getPassthroughKeyOnKeydown(key("Escape"), ""), "escape");
+  assert.equal(getPassthroughKeyOnKeydown(key("Escape"), "draft"), null);
+  assert.equal(getPassthroughKeyOnKeydown(key("Tab"), ""), null);
 });
