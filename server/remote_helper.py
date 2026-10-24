@@ -650,8 +650,20 @@ def tmux_pane_target(window_id):
     return f"%{int(window_id)}"
 
 
+def tmux_attached_session_ids(socket):
+    """Sessions with a real (non control-mode) client; the deck's own watchers are control clients."""
+    attached = set()
+    output = run_tmux(["list-clients", "-F", TMUX_FIELD_SEPARATOR.join(["#{session_id}", "#{client_control_mode}"])], socket)
+    for line in output.splitlines():
+        session_id, _, control = line.partition(TMUX_FIELD_SEPARATOR)
+        if session_id and control.strip() != "1":
+            attached.add(session_id)
+    return attached
+
+
 def tmux_tree(socket):
     output = run_tmux(["list-panes", "-a", "-F", TMUX_PANE_FORMAT], socket)
+    attached_ids = tmux_attached_session_ids(socket)
     sessions = {}
     for line in output.splitlines():
         if not line.strip():
@@ -666,7 +678,7 @@ def tmux_tree(socket):
             pane_width, pane_height, window_panes, alternate_on, window_zoomed,
             window_width, window_height,
         ) = fields
-        attached = int(session_attached or 0) > 0
+        attached = session_id in attached_ids
         session = sessions.setdefault(
             session_id,
             {
@@ -1029,13 +1041,13 @@ def tmux_action_resize_window():
     target = tmux_pane_target(window_id)
     size_format = TMUX_FIELD_SEPARATOR.join(
         [
-            "#{window_id}", "#{session_attached}", "#{window_width}", "#{window_height}", "#{window-size}",
+            "#{window_id}", "#{session_id}", "#{window_width}", "#{window_height}", "#{window-size}",
             "#{window_panes}", "#{window_zoomed_flag}", "#{pane_active}",
         ]
     )
     info = run_tmux(["display-message", "-p", "-t", target, size_format], socket).rstrip("\n").split(TMUX_FIELD_SEPARATOR)
-    window, attached_count, width, height, size_mode, pane_count, zoomed_flag, pane_active = (info + [""] * 8)[:8]
-    attached = int(attached_count or 0) > 0
+    window, session_id, width, height, size_mode, pane_count, zoomed_flag, pane_active = (info + [""] * 8)[:8]
+    attached = session_id in tmux_attached_session_ids(socket)
     pane_count = int(pane_count or 1)
     result = {
         "socket": socket,
@@ -1087,8 +1099,27 @@ def tmux_action_close_panel():
     return {"socket": socket, "kind": kind, "id": ident}
 
 
+def tmux_action_describe_window():
+    """Where a deck pane lives, for the server's control-mode watcher."""
+    window_id = int(PAYLOAD["windowId"])
+    socket = resolve_socket(PAYLOAD.get("socket") or "")
+    fmt = TMUX_FIELD_SEPARATOR.join(["#{session_id}", "#{session_name}", "#{window_id}", "#{pane_id}"])
+    info = run_tmux(["display-message", "-p", "-t", tmux_pane_target(window_id), fmt], socket).rstrip("\n").split(TMUX_FIELD_SEPARATOR)
+    session_id, session_name, tmux_window, pane = (info + [""] * 4)[:4]
+    return {
+        "socket": socket,
+        "windowId": window_id,
+        "sessionId": session_id,
+        "sessionName": session_name,
+        "tmuxWindowId": tmux_window,
+        "paneId": pane,
+        "tmuxBinary": get_tmux_binary(),
+    }
+
+
 TMUX_ACTIONS = {
     "test": tmux_action_test,
+    "describe_window": tmux_action_describe_window,
     "resize_window": tmux_action_resize_window,
     "toggle_zoom": tmux_action_toggle_zoom,
     "close_panel": tmux_action_close_panel,

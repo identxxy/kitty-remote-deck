@@ -26,6 +26,7 @@ http://localhost:3040
 
 - `server.js`: local HTTP server and API routes
 - `server/kitty_runner.js`: local/SSH helper invocation wrapper
+- `server/tmux_watcher.js`: control-mode tmux clients (`tmux -C attach`, local or over ssh) shared per target/socket/session; `GET /api/events` turns their `%output` and layout notifications into server-sent `screen`/`tree`/`reset` events for the page, which then re-fetches `/api/screen`
 - `server/url_proxy.js`: URL proxy rewriting helpers for HTML/CSS resources
 - `server/remote_helper.py`: Python helper used locally or streamed over SSH to run `kitty @` or `tmux` actions and URL resource fetches; `PAYLOAD["backend"]` selects the action set, and the tmux tree is mapped onto kitty's shape (session -> OS window, window -> tab, pane -> window)
 - `public/index.html`: app layout

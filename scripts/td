@@ -264,7 +264,8 @@ def send_image(alias, name, socket, data):
         f'd="$HOME/Pictures/remote-deck/{stamp[:8]}"; f="$d/{file_name}"; '
         f'mkdir -p "$d" && cat > "$f" && chmod 600 "$f" || exit 1; '
         f's={shlex.quote(name)}; '
-        f'[ -n "$s" ] || s=$(tmux {sock} list-clients -F "#{{client_activity}} #{{session_name}}" | sort -rn | head -1 | cut -d" " -f2-); '
+        # Skip control-mode clients: the deck's own watchers are attached that way.
+        f'[ -n "$s" ] || s=$(tmux {sock} list-clients -F "#{{client_control_mode}}#{{client_activity}} #{{session_name}}" | grep "^0" | cut -c2- | sort -rn | head -1 | cut -d" " -f2-); '
         f'[ -n "$s" ] || {{ echo "no attached tmux client on this host; use td img HOST:SESSION" >&2; exit 2; }}; '
         f'printf "%s" "[{file_name}](file://$f)" | tmux {sock} load-buffer -b td-img - '
         f'&& tmux {sock} paste-buffer -d -p -b td-img -t "$s" && echo "$s $f"'

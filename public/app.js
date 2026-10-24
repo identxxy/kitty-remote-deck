@@ -41,8 +41,14 @@ const MOBILE_UTILS = window.KRDMobileUtils;
 const PREVIEW_HISTORY = window.KRDPreviewHistory;
 const COMPOSER_UTILS = window.KRDComposerUtils;
 const PANE_TREE = window.KRDPaneTree;
+const TERMINAL_LINES = window.KRDTerminalLines;
 const PANE_LAYOUT_STORAGE_KEY = "kitty-remote-deck.paneLayout.v1";
 const SECONDARY_VIEW_POLL_MS = 2000;
+// With a live tmux event stream, polling is only a safety net.
+const LIVE_POLL_MS = 15000;
+const LIVE_MIN_GAP_MS = { screen: 120, all: 600 };
+const LIVE_RESUBSCRIBE_DEBOUNCE_MS = 150;
+const LIVE_RECONNECT_MAX_MS = 60000;
 const ANSI_UTILS = window.KRDAnsiUtils;
 
 const DEFAULT_TARGET_FORM = {
@@ -137,6 +143,13 @@ const state = {
   sessionCreating: false
 };
 
+// Every view slot owns one output element for its whole life. Activating a view
+// only changes which element the selection, composer and sidebar act on; nothing
+// moves in the DOM, so scroll positions and layout stay put.
+const originalScreenOutput = document.querySelector("#screenOutput");
+let activeOutput = originalScreenOutput;
+let outputResizeObserver = null;
+
 const elements = {
   appShell: document.querySelector("#appShell"),
   authGate: document.querySelector("#authGate"),
@@ -184,7 +197,9 @@ const elements = {
   mobileTerminalWidthBtn: document.querySelector("#mobileTerminalWidthBtn"),
   editorPane: document.querySelector("#editorPane"),
   viewerMeta: document.querySelector("#viewerMeta"),
-  screenOutput: document.querySelector("#screenOutput"),
+  get screenOutput() {
+    return activeOutput;
+  },
   latestOutputBtn: document.querySelector("#latestOutputBtn"),
   bottomPanel: document.querySelector("#bottomPanel"),
   previewDrawer: document.querySelector("#previewDrawer"),
@@ -267,8 +282,70 @@ let lastTreeRefreshAt = 0;
 let lastAllTextRefreshAt = 0;
 // Hash of the screen currently rendered, so polls can ask the server for "unchanged".
 let renderedScreen = { key: "", hash: "", text: null, data: null };
+// Recently shown panes, keyed like renderedScreen: switching back repaints the
+// last snapshot at once and asks the server only for what changed since.
+const SCREEN_CACHE_LIMIT = 8;
+const screenCache = new Map();
+
+function screenKeyFor(targetId, socket, windowId, extent) {
+  return `${targetId}|${socket || ""}|${windowId}|${extent}`;
+}
+
+function rememberScreen(entry) {
+  if (!entry.key || typeof entry.text !== "string" || !entry.data) {
+    return;
+  }
+  const isNew = !screenCache.has(entry.key);
+  screenCache.delete(entry.key);
+  screenCache.set(entry.key, entry);
+  while (screenCache.size > SCREEN_CACHE_LIMIT) {
+    screenCache.delete(screenCache.keys().next().value);
+  }
+  if (isNew && state.flatWindows.length) {
+    renderSessions();
+  }
+}
+
+function isPaneCached(windowId) {
+  return ["all", "screen"].some((extent) => screenCache.has(screenKeyFor(state.selectedTargetId, state.selectedSocket, Number(windowId), extent)));
+}
+
+// Before leaving a pane, keep its snapshot plus where the user had scrolled.
+function stashRenderedScreen() {
+  if (!renderedScreen.key || elements.screenOutput.getAttribute("aria-busy") === "true" || renderedScreen.text !== state.screenText) {
+    return;
+  }
+  rememberScreen({
+    ...renderedScreen,
+    scrollTop: elements.screenOutput.scrollTop,
+    followTail: state.allTextFollowTail
+  });
+}
+
+// Repaint a cached snapshot for the pane being selected; false when none.
+function restoreCachedScreen(windowId) {
+  const key = screenKeyFor(state.selectedTargetId, state.selectedSocket, windowId, activeExtent());
+  const entry = screenCache.get(key);
+  if (!entry) {
+    return false;
+  }
+  renderedScreen = { key: entry.key, hash: entry.hash, text: entry.text, data: entry.data };
+  if (activeExtent() === "all") {
+    state.allTextFollowTail = entry.followTail !== false;
+  }
+  renderScreenData(entry.data, { scrollToBottom: activeExtent() === "all" && state.allTextFollowTail });
+  if (!(activeExtent() === "all" && state.allTextFollowTail)) {
+    elements.screenOutput.scrollTop = entry.scrollTop || 0;
+  }
+  return true;
+}
 // Pane id -> text last drawn into the tmux window layout (see renderWindowLayout).
-let renderedPaneTexts = new Map();
+function paneTextsFor(output) {
+  if (!output.__paneTexts) {
+    output.__paneTexts = new Map();
+  }
+  return output.__paneTexts;
+}
 let sessionPointerStart = null;
 let suppressSessionClickUntil = 0;
 let clientDebugEnabled = false;
@@ -653,7 +730,7 @@ function loadUiPreferences() {
     state.uiTheme = THEME_SET.has(parsed.uiTheme) ? parsed.uiTheme : "dark";
     // All is the default; a stored Screen choice only sticks if the user picked it from the menu.
     state.screenExtentExplicit = parsed.screenExtentExplicit === true;
-    activeExtent() =
+    state.screenExtent =
       state.screenExtentExplicit && TEXT_EXTENT_SET.has(parsed.screenExtent) ? parsed.screenExtent : "all";
     state.mobileTerminalWidth = MOBILE_TERMINAL_WIDTH_SET.has(parsed.mobileTerminalWidth)
       ? parsed.mobileTerminalWidth
@@ -719,6 +796,7 @@ function rememberSelectedPane() {
     return;
   }
   syncActivePaneActor();
+  syncLiveSubscriptions();
   try {
     localStorage.setItem(
       LAST_PANE_STORAGE_KEY,
@@ -1166,6 +1244,9 @@ function showAuthToast(message, mode = "success") {
 
 function setAuthState(authenticated, device = null) {
   state.authenticated = Boolean(authenticated);
+  if (!state.authenticated) {
+    closeLiveSource();
+  }
   state.authDevice = state.authenticated ? device : null;
   elements.authGate.hidden = state.authenticated;
   elements.authDeviceLabel.hidden = !state.authenticated;
@@ -1188,7 +1269,7 @@ function updateStatusBar() {
   elements.statusTargetName.textContent = `Target: ${target ? target.name : "-"}`;
   elements.statusSocketName.textContent = `Socket: ${state.selectedSocket || "auto"}`;
   elements.statusPaneName.textContent = pane ? `Pane: ${describePaneLocation(pane)}` : "Pane: -";
-  elements.statusAutoRefresh.textContent = `Auto-refresh: ${state.autoRefresh ? "on" : "off"}`;
+  elements.statusAutoRefresh.textContent = `Auto-refresh: ${!state.autoRefresh ? "off" : isPrimaryLive() ? "live" : "on"}`;
 }
 
 function isScreenOutputNearBottom(threshold = 48) {
@@ -1242,7 +1323,7 @@ function leaveWindowLayout() {
   const wasLayout = output.classList.contains("window-layout");
   output.classList.remove("window-layout");
   delete output.dataset.layoutKey;
-  renderedPaneTexts.clear();
+  paneTextsFor(output).clear();
   return wasLayout;
 }
 
@@ -1253,7 +1334,7 @@ function renderWindowLayout(data, options = {}) {
   const output = elements.screenOutput;
   const previousTop = output.scrollTop;
   const previousLeft = output.scrollLeft;
-  state.screenText = drawWindowLayout(output, data, Number(state.selectedWindowId), renderedPaneTexts);
+  state.screenText = drawWindowLayout(output, data, Number(state.selectedWindowId), paneTextsFor(output));
   output.setAttribute("aria-busy", "false");
   output.dataset.paneId = hasSelectedWindow() ? String(state.selectedWindowId) : "";
   if (options.scrollToTop) {
@@ -1307,7 +1388,7 @@ function drawWindowLayout(output, data, selectedId, paneTexts) {
     }
     const text = pane.text || "";
     if (paneTexts.get(Number(pane.id)) !== text) {
-      node.innerHTML = renderTerminalText(text || " ");
+      renderTerminalLines(node, text, " ");
       paneTexts.set(Number(pane.id), text);
     }
     node.classList.toggle("selected", Number(pane.id) === selectedId);
@@ -1326,8 +1407,8 @@ function renderScrolledPaneText(text, options = {}) {
   }
   const nextText = text || "";
   state.screenText = nextText;
-  node.innerHTML = renderTerminalText(nextText || " ");
-  renderedPaneTexts.set(Number(state.selectedWindowId), nextText);
+  renderTerminalLines(node, nextText, " ");
+  paneTextsFor(elements.screenOutput).set(Number(state.selectedWindowId), nextText);
   const cached = renderedScreen.data?.panes?.find((pane) => Number(pane.id) === Number(state.selectedWindowId));
   if (cached) {
     cached.text = nextText;
@@ -1345,7 +1426,7 @@ function renderScreenText(text, options = {}) {
 
   if (wasLayout || state.screenText !== nextText || output.getAttribute("aria-busy") === "true") {
     state.screenText = nextText;
-    output.innerHTML = renderTerminalText(state.screenText || "(current screen is empty)");
+    renderTerminalLines(output, state.screenText, "(current screen is empty)");
   }
   output.setAttribute("aria-busy", "false");
   output.dataset.paneId = hasSelectedWindow() ? String(state.selectedWindowId) : "";
@@ -1934,6 +2015,9 @@ async function createKittyPanel(kind, context = {}) {
 async function selectWindow(windowId) {
   const nextWindowId = Number(windowId);
   const selectionChanged = Number(state.selectedWindowId) !== nextWindowId;
+  if (selectionChanged) {
+    stashRenderedScreen();
+  }
   state.selectedWindowId = nextWindowId;
   if (selectionChanged) {
     viewportScrolledBack = false;
@@ -1950,8 +2034,8 @@ async function selectWindow(windowId) {
   if (selectionChanged && layoutPane) {
     elements.screenOutput.querySelectorAll(".tmux-pane.selected").forEach((node) => node.classList.remove("selected"));
     layoutPane.classList.add("selected");
-    state.screenText = renderedPaneTexts.get(nextWindowId) || "";
-  } else if (selectionChanged) {
+    state.screenText = paneTextsFor(elements.screenOutput).get(nextWindowId) || "";
+  } else if (selectionChanged && !restoreCachedScreen(nextWindowId)) {
     renderPaneLoading(nextWindowId);
   }
   renderSessions();
@@ -2077,6 +2161,7 @@ async function fitPaneToScreen(options = {}) {
 const leafSlots = new Map();
 const secondaryViewers = new Map();
 let paneTreeMobileMode = null;
+let renderedTreeSignature = "";
 
 function currentActor() {
   return {
@@ -2152,6 +2237,10 @@ function getLeafSlot(leafNode) {
     </div>
     <div class="pane-slot-body"></div>
   `;
+  const output = originalScreenOutput.__adopted ? createOutputElement() : originalScreenOutput;
+  originalScreenOutput.__adopted = true;
+  slot.querySelector(".pane-slot-body").replaceChildren(output);
+  bindOutputElement(output);
   leafSlots.set(leafNode.id, slot);
   return slot;
 }
@@ -2175,6 +2264,113 @@ function buildPaneNode(node) {
   divider.setAttribute("aria-orientation", node.direction === "horizontal" ? "vertical" : "horizontal");
   split.append(buildPaneNode(node.first), divider, buildPaneNode(node.second));
   return split;
+}
+
+// Listeners live on each output element; they only act while that element is
+// the active view (a click on another view activates it through the tree).
+function bindOutputElement(output) {
+  if (output.__bound) {
+    return;
+  }
+  output.__bound = true;
+  const whenActive = (handler) => (event) => (output === activeOutput ? handler(event) : undefined);
+  output.addEventListener("click", whenActive(handleScreenPaneClick));
+  output.addEventListener("wheel", whenActive(queueRemoteScrollFromWheel), { passive: false });
+  output.addEventListener("touchstart", whenActive(handleScreenTouchStart), { passive: true });
+  output.addEventListener("touchmove", whenActive(handleScreenTouchMove), { passive: false });
+  output.addEventListener("touchend", whenActive(handleScreenTouchEnd), { passive: true });
+  output.addEventListener("touchcancel", whenActive(handleScreenTouchEnd), { passive: true });
+  output.addEventListener("scroll", whenActive(handleScreenOutputScroll), { passive: true });
+  output.addEventListener("click", whenActive(handleScreenLinkClick));
+  attachWheelContainmentTo(output);
+}
+
+async function handleScreenPaneClick(event) {
+  const paneNode = event.target.closest?.(".tmux-pane");
+  if (!paneNode || window.getSelection()?.toString()) {
+    return;
+  }
+  const paneId = Number(paneNode.dataset.layoutPaneId);
+  if (paneId !== Number(state.selectedWindowId)) {
+    await selectWindow(paneId);
+  }
+}
+
+async function handleScreenLinkClick(event) {
+  const link = event.target.closest?.("[data-preview-url]");
+  if (!link) {
+    return;
+  }
+  event.preventDefault();
+  try {
+    await loadUrlPreview(link.dataset.previewUrl, { history: "reset" });
+  } catch (error) {
+    setPreviewStatus(error.message, "danger");
+  }
+}
+
+function createOutputElement() {
+  const output = document.createElement("pre");
+  output.className = "screen-output scroll-panel";
+  output.textContent = "Loading view...";
+  return output;
+}
+
+function slotOutput(paneId) {
+  return leafSlots.get(paneId)?.querySelector(".screen-output") || null;
+}
+
+function treeSignature(node) {
+  return node.kind === "leaf" ? node.id : `(${node.direction}:${treeSignature(node.first)},${treeSignature(node.second)})`;
+}
+
+// Hand the selection to another slot's element. The element being left keeps
+// everything it shows and is picked up by a secondary viewer seeded with that
+// screen; the element being entered already shows its last screen, which
+// becomes the rendered screen so the next refresh only revalidates.
+function setActiveOutput(paneId) {
+  const output = slotOutput(paneId);
+  if (!output || output === activeOutput) {
+    return;
+  }
+  const previous = activeOutput;
+  if (renderedScreen.key && renderedScreen.text === state.screenText && previous.getAttribute("aria-busy") !== "true") {
+    const [targetId, socket, windowId, extent] = renderedScreen.key.split("|");
+    secondaryScreenCache.set(paneLiveKey(targetId, socket, Number(windowId)), {
+      hash: renderedScreen.hash,
+      data: renderedScreen.data,
+      text: renderedScreen.text,
+      extent,
+      followTail: state.allTextFollowTail,
+      element: previous
+    });
+  }
+  stashRenderedScreen();
+  const viewer = secondaryViewers.get(paneId);
+  activeOutput = output;
+  if (outputResizeObserver) {
+    outputResizeObserver.disconnect();
+    outputResizeObserver.observe(output);
+  }
+  if (viewer) {
+    viewer.destroy();
+    secondaryViewers.delete(paneId);
+  }
+  if (viewer && viewer.hash && viewer.data && viewer.extent === state.screenExtent) {
+    renderedScreen = {
+      key: screenKeyFor(viewer.actor.targetId, viewer.actor.socket, viewer.actor.windowId, viewer.extent),
+      hash: viewer.hash,
+      text: viewer.text,
+      data: viewer.data
+    };
+    state.screenText = viewer.text;
+    if (viewer.extent === "all") {
+      state.allTextFollowTail = viewer.followTail;
+    }
+  } else {
+    renderedScreen = { key: "", hash: "", text: null, data: null };
+    state.screenText = "";
+  }
 }
 
 function destroySecondaryViewer(paneId) {
@@ -2203,21 +2399,38 @@ function renderPaneTree() {
   });
 
   const mobile = isMobileViewport();
-  paneTreeMobileMode = mobile;
+  const signature = mobile ? `mobile:${state.activePaneId}` : treeSignature(state.paneRoot);
   container.classList.toggle("single", leavesNow.length === 1);
   container.classList.toggle("mobile", mobile);
-  const built = mobile ? getLeafSlot(activeLeaf()) : buildPaneNode(state.paneRoot);
-  container.replaceChildren(built);
-
-  const activeBody = leafSlots.get(state.activePaneId).querySelector(".pane-slot-body");
-  destroySecondaryViewer(state.activePaneId);
-  if (elements.screenOutput.parentElement !== activeBody) {
-    activeBody.replaceChildren(elements.screenOutput);
+  if (signature !== renderedTreeSignature) {
+    // Only splits, closes and the mobile/desktop switch rebuild the containers;
+    // slots keep their elements, and scroll positions survive the re-insert.
+    const scrolls = new Map();
+    leafSlots.forEach((slot, id) => {
+      const output = slot.querySelector(".screen-output");
+      scrolls.set(id, [output.scrollTop, output.scrollLeft]);
+    });
+    container.replaceChildren(mobile ? getLeafSlot(activeLeaf()) : buildPaneNode(state.paneRoot));
+    leafSlots.forEach((slot, id) => {
+      const output = slot.querySelector(".screen-output");
+      const saved = scrolls.get(id);
+      if (saved && slot.isConnected) {
+        output.scrollTop = saved[0];
+        output.scrollLeft = saved[1];
+      }
+    });
+    renderedTreeSignature = signature;
   }
+  paneTreeMobileMode = mobile;
+  setActiveOutput(state.activePaneId);
 
   leavesNow.forEach((leafNode) => {
     const slot = leafSlots.get(leafNode.id);
+    if (!slot) {
+      return;
+    }
     slot.classList.toggle("active", leafNode.id === state.activePaneId);
+    slot.querySelector(".screen-output").classList.toggle("secondary-output", leafNode.id !== state.activePaneId);
     if (leafNode.id === state.activePaneId) {
       return;
     }
@@ -2230,12 +2443,10 @@ function renderPaneTree() {
       return;
     }
     destroySecondaryViewer(leafNode.id);
-    const output = document.createElement("pre");
-    output.className = "screen-output secondary-output";
-    slot.querySelector(".pane-slot-body").replaceChildren(output);
-    secondaryViewers.set(leafNode.id, new SecondaryViewer(leafNode.id, leafNode.actor, output));
+    secondaryViewers.set(leafNode.id, new SecondaryViewer(leafNode.id, leafNode.actor, slot.querySelector(".screen-output")));
   });
   leavesNow.forEach((leafNode) => updateSlotHead(leafNode.id));
+  syncLiveSubscriptions();
 }
 
 function updateSlotHead(paneId) {
@@ -2245,7 +2456,8 @@ function updateSlotHead(paneId) {
     return;
   }
   const target = state.targets.find((item) => item.id === node.actor.targetId);
-  const paneTitle = paneId === state.activePaneId ? selectedPane()?.title || "" : secondaryViewers.get(paneId)?.title || "";
+  const treePane = node.actor.targetId === state.selectedTargetId ? state.flatWindows.find((item) => Number(item.id) === node.actor.windowId) : null;
+  const paneTitle = paneId === state.activePaneId ? selectedPane()?.title || "" : secondaryViewers.get(paneId)?.title || treePane?.title || "";
   slot.querySelector(".pane-slot-title").textContent = [
     target?.name || node.actor.targetId || "No target",
     node.actor.windowId !== null ? `#${node.actor.windowId}` : "no pane",
@@ -2255,24 +2467,58 @@ function updateSlotHead(paneId) {
     .join(" · ");
 }
 
+// Last screen drawn for each pane by any view, so a view that is re-bound or
+// re-created starts with content instead of a placeholder.
+const secondaryScreenCache = new Map();
+
 class SecondaryViewer {
   constructor(paneId, actor, output) {
     this.paneId = paneId;
     this.actor = actor;
     this.output = output;
-    this.paneTexts = new Map();
+    this.extent = state.screenExtent;
     this.hash = "";
+    this.text = "";
+    this.data = null;
     this.title = "";
+    this.followTail = true;
     this.failures = 0;
     this.timer = null;
     this.destroyed = false;
-    this.output.textContent = "Loading view...";
+    this.inFlight = false;
+    this.pending = false;
+    const cached = secondaryScreenCache.get(paneLiveKey(actor.targetId, actor.socket, actor.windowId));
+    if (cached && cached.extent === this.extent) {
+      this.hash = cached.hash;
+      this.text = cached.text;
+      this.data = cached.data;
+      this.followTail = cached.followTail !== false;
+      if (cached.element !== output) {
+        this.draw(cached.data);
+      }
+    } else if (!output.__renderedLines && !output.querySelector(".tmux-window")) {
+      this.output.textContent = "Loading view...";
+    }
     this.poll();
+  }
+
+  get live() {
+    return liveWindows.has(paneLiveKey(this.actor.targetId, this.actor.socket, this.actor.windowId));
   }
 
   schedule(delay) {
     clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.poll(), delay);
+    this.timer = setTimeout(() => this.poll(), this.live ? Math.max(delay, LIVE_POLL_MS) : delay);
+  }
+
+  // A live event arrived for this view: refresh now, or once more after the
+  // refresh already running.
+  trigger() {
+    if (this.inFlight) {
+      this.pending = true;
+      return;
+    }
+    this.poll();
   }
 
   async poll() {
@@ -2287,25 +2533,52 @@ class SecondaryViewer {
       this.output.textContent = "No pane bound. Click this view, then pick a pane in the sidebar.";
       return;
     }
+    if (this.extent !== state.screenExtent) {
+      this.extent = state.screenExtent;
+      this.hash = "";
+    }
+    this.inFlight = true;
     try {
       const query = new URLSearchParams({
         targetId: this.actor.targetId,
         windowId: String(this.actor.windowId),
-        extent: "screen"
+        extent: this.extent
       });
       if (this.actor.socket) {
         query.set("socket", this.actor.socket);
       }
       if (this.hash) {
         query.set("since", this.hash);
+        if (typeof this.text === "string" && !this.data?.panes) {
+          query.set("delta", "1");
+        }
       }
       const data = await apiFetch(`/api/screen?${query.toString()}`);
       if (this.destroyed) {
         return;
       }
+      if (data.delta) {
+        if (data.base === this.hash && typeof this.text === "string") {
+          data.text = TERMINAL_LINES.applyLineDelta(TERMINAL_LINES.splitLines(this.text), data).join("\n");
+        } else {
+          this.hash = "";
+          this.schedule(0);
+          this.inFlight = false;
+          return;
+        }
+      }
       if (!data.unchanged) {
         this.hash = data.hash || "";
+        this.data = data;
         this.draw(data);
+        secondaryScreenCache.set(paneLiveKey(this.actor.targetId, this.actor.socket, this.actor.windowId), {
+          hash: this.hash,
+          data,
+          text: this.text,
+          extent: this.extent,
+          followTail: this.followTail,
+          element: this.output
+        });
       }
       this.failures = 0;
     } catch (error) {
@@ -2315,18 +2588,38 @@ class SecondaryViewer {
       delete this.output.dataset.layoutKey;
       this.output.textContent = `View unavailable: ${error.message}`;
     }
+    this.inFlight = false;
+    if (this.pending && !this.destroyed) {
+      this.pending = false;
+      this.poll();
+      return;
+    }
     this.schedule(Math.min(SECONDARY_VIEW_POLL_MS * (1 + this.failures), 15000));
   }
 
   draw(data) {
     if (Array.isArray(data.panes) && data.window) {
-      drawWindowLayout(this.output, data, this.actor.windowId, this.paneTexts);
+      const top = this.output.scrollTop;
+      const left = this.output.scrollLeft;
+      this.text = drawWindowLayout(this.output, data, this.actor.windowId, paneTextsFor(this.output));
+      this.output.scrollTop = top;
+      this.output.scrollLeft = left;
       const selected = data.panes.find((pane) => Number(pane.id) === this.actor.windowId);
       this.title = selected?.title || "";
     } else {
-      this.output.classList.remove("window-layout");
-      delete this.output.dataset.layoutKey;
-      this.output.innerHTML = renderTerminalText(data.text || "(current screen is empty)");
+      const output = this.output;
+      const nearBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 48;
+      const firstDraw = !output.__renderedLines;
+      output.classList.remove("window-layout");
+      delete output.dataset.layoutKey;
+      this.text = data.text || "";
+      renderTerminalLines(output, this.text, "(current screen is empty)");
+      if (this.extent === "all" && (firstDraw || nearBottom || this.followTail)) {
+        output.scrollTop = output.scrollHeight;
+        this.followTail = true;
+      } else if (this.extent === "all") {
+        this.followTail = false;
+      }
     }
     updateSlotHead(this.paneId);
   }
@@ -2334,7 +2627,6 @@ class SecondaryViewer {
   destroy() {
     this.destroyed = true;
     clearTimeout(this.timer);
-    this.output.remove();
   }
 }
 
@@ -2344,6 +2636,11 @@ async function bindSelectionToActor(actor) {
     setStatus("This view has no target; pick a pane in the sidebar to bind it.", "warning");
     return;
   }
+  const sameSelection =
+    actor.targetId === state.selectedTargetId &&
+    hasSelectedWindow() &&
+    Number(state.selectedWindowId) === actor.windowId &&
+    (state.selectedSocket || "") === (actor.socket || "");
   if (actor.targetId !== state.selectedTargetId) {
     state.selectedTargetId = actor.targetId;
     state.editingTargetId = actor.targetId;
@@ -2358,18 +2655,22 @@ async function bindSelectionToActor(actor) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ targetId: actor.targetId })
     });
-  } else if (
-    hasSelectedWindow() &&
-    Number(state.selectedWindowId) === actor.windowId &&
-    (state.selectedSocket || "") === (actor.socket || "")
-  ) {
-    return;
   }
-  state.selectedSocket = actor.socket || "";
-  state.selectedWindowId = actor.windowId;
-  invalidateScreenRequests();
+  if (!sameSelection) {
+    stashRenderedScreen();
+    state.selectedSocket = actor.socket || "";
+    state.selectedWindowId = actor.windowId;
+    invalidateScreenRequests();
+  }
   if (actor.windowId !== null) {
-    renderPaneLoading(actor.windowId);
+    const key = screenKeyFor(state.selectedTargetId, state.selectedSocket, actor.windowId, activeExtent());
+    if (renderedScreen.key !== key && !restoreCachedScreen(actor.windowId)) {
+      renderPaneLoading(actor.windowId);
+    }
+  }
+  if (sameSelection) {
+    await refreshScreen({ force: true });
+    return;
   }
   await loadSessions({ forceRefresh: true, scrollToBottom: activeExtent() === "screen" });
 }
@@ -2591,6 +2892,7 @@ function renderSessions() {
               if (window.is_active) badges.push("active");
               if (window.is_focused) badges.push("focused");
               if (window.is_attached) badges.push("attached");
+              if (isPaneCached(window.id)) badges.push("cached");
               if (window.alternate_on) badges.push("alt-screen");
               if (window.zoomed) badges.push("zoomed");
               if (window.at_prompt) badges.push("prompt");
@@ -3210,13 +3512,23 @@ async function refreshScreen(options = {}) {
       state.screenText !== "" &&
       renderedScreen.text === state.screenText &&
       elements.screenOutput.getAttribute("aria-busy") !== "true";
-    if (canSkipUnchanged && renderedScreen.hash) {
+    if (canSkipUnchanged && renderedScreen.hash && !options.noDelta) {
       query.set("since", renderedScreen.hash);
+      query.set("delta", "1");
     }
 
     const data = await apiFetch(`/api/screen?${query.toString()}`, {
       signal: requestController.signal
     });
+    if (data.delta) {
+      // The server described the new text relative to the one we rendered.
+      if (canSkipUnchanged && data.base === renderedScreen.hash && typeof renderedScreen.text === "string") {
+        data.text = TERMINAL_LINES.applyLineDelta(TERMINAL_LINES.splitLines(renderedScreen.text), data).join("\n");
+      } else if (requestSerial === screenRequestSerial) {
+        state.refreshing = false;
+        return refreshScreen({ ...options, force: true, noDelta: true });
+      }
+    }
     if (
       requestSerial === screenRequestSerial &&
       capturedTargetId === state.selectedTargetId &&
@@ -3233,6 +3545,7 @@ async function refreshScreen(options = {}) {
         }
         renderScreenData(data, options);
         renderedScreen = { key: screenKey, hash: data.hash || "", text: state.screenText, data };
+        rememberScreen(renderedScreen);
       }
     }
   } catch (error) {
@@ -3628,6 +3941,193 @@ function resetTargetDraft() {
   setStatus("Creating a new target. Save it to make it available in the top selector.", "neutral");
 }
 
+// ---- Live updates -----------------------------------------------------------
+// One EventSource carries every tmux pane this page shows (primary view and
+// split views). The server watches each pane's session through a tmux
+// control-mode client and sends `screen` when the pane's window changes; the
+// page then re-fetches through the same /api/screen path polling uses.
+let liveSource = null;
+let liveSubsKey = "";
+let liveWindows = new Set();
+let liveSyncTimer = null;
+let liveReconnectTimer = null;
+let liveReconnectDelay = 3000;
+let liveRefreshRunning = false;
+let liveRefreshPending = false;
+let liveRefreshTimer = null;
+let lastLiveRefreshAt = 0;
+
+function paneLiveKey(targetId, socket, windowId) {
+  return `${targetId || ""}|${socket || ""}|${windowId}`;
+}
+
+function isPrimaryLive() {
+  return hasSelectedWindow() && liveWindows.has(paneLiveKey(state.selectedTargetId, state.selectedSocket, Number(state.selectedWindowId)));
+}
+
+function desiredLiveSubscriptions() {
+  const subs = new Map();
+  const add = (targetId, socket, windowId) => {
+    const target = state.targets.find((item) => item.id === targetId);
+    if (!target || target.backend !== "tmux" || windowId === null || windowId === undefined) {
+      return;
+    }
+    subs.set(paneLiveKey(targetId, socket, Number(windowId)), { targetId, socket: socket || "", windowId: Number(windowId) });
+  };
+  if (state.selectedTargetId && hasSelectedWindow()) {
+    add(state.selectedTargetId, state.selectedSocket, state.selectedWindowId);
+  }
+  secondaryViewers.forEach((viewer) => add(viewer.actor.targetId, viewer.actor.socket, viewer.actor.windowId));
+  return [...subs.values()];
+}
+
+function syncLiveSubscriptions() {
+  clearTimeout(liveSyncTimer);
+  liveSyncTimer = setTimeout(() => {
+    liveSyncTimer = null;
+    if (!state.authenticated || document.hidden || typeof EventSource === "undefined") {
+      closeLiveSource();
+      return;
+    }
+    const subs = desiredLiveSubscriptions();
+    const key = JSON.stringify(subs);
+    if (!subs.length) {
+      closeLiveSource();
+      return;
+    }
+    if (liveSource && key === liveSubsKey) {
+      return;
+    }
+    openLiveSource(subs, key);
+  }, LIVE_RESUBSCRIBE_DEBOUNCE_MS);
+}
+
+function openLiveSource(subs, key) {
+  closeLiveSource({ keepDelay: true });
+  liveSubsKey = key;
+  const source = new EventSource(`/api/events?subs=${encodeURIComponent(JSON.stringify(subs))}`);
+  liveSource = source;
+  source.addEventListener("open", () => {
+    liveReconnectDelay = 3000;
+  });
+  // The server names the subscriptions it could attach a watcher to.
+  source.addEventListener("subscribed", (event) => {
+    const data = parseLiveEvent(event);
+    const live = Array.isArray(data.live) ? data.live : [];
+    setLiveWindows(new Set(live.map((item) => paneLiveKey(item.targetId, item.socket, Number(item.windowId)))));
+  });
+  source.addEventListener("screen", (event) => handleLiveScreenEvent(parseLiveEvent(event)));
+  source.addEventListener("tree", () => {
+    loadSessions({ refreshPane: false }).catch(() => {});
+  });
+  source.addEventListener("reset", () => {
+    scheduleLiveReconnect();
+  });
+  source.addEventListener("error", () => {
+    // EventSource retries network drops itself; a closed stream (HTTP error,
+    // server restart) needs our own backoff.
+    setLiveWindows(new Set());
+    if (source.readyState === EventSource.CLOSED) {
+      scheduleLiveReconnect();
+    }
+  });
+}
+
+function parseLiveEvent(event) {
+  try {
+    return JSON.parse(event.data);
+  } catch (error) {
+    return {};
+  }
+}
+
+function setLiveWindows(next) {
+  const changed = next.size !== liveWindows.size || [...next].some((item) => !liveWindows.has(item));
+  liveWindows = next;
+  if (!changed) {
+    return;
+  }
+  updateStatusBar();
+  if (pollTimer && state.autoRefresh) {
+    schedulePoll(getPollDelayMs());
+  }
+}
+
+function scheduleLiveReconnect() {
+  closeLiveSource({ keepDelay: true });
+  clearTimeout(liveReconnectTimer);
+  liveReconnectTimer = setTimeout(() => {
+    liveReconnectTimer = null;
+    liveSubsKey = "";
+    syncLiveSubscriptions();
+  }, liveReconnectDelay);
+  liveReconnectDelay = Math.min(liveReconnectDelay * 2, LIVE_RECONNECT_MAX_MS);
+}
+
+function closeLiveSource(options = {}) {
+  if (liveSource) {
+    liveSource.close();
+    liveSource = null;
+  }
+  liveSubsKey = "";
+  if (!options.keepDelay) {
+    clearTimeout(liveReconnectTimer);
+    liveReconnectTimer = null;
+    liveReconnectDelay = 3000;
+  }
+  setLiveWindows(new Set());
+}
+
+function handleLiveScreenEvent(data) {
+  const key = paneLiveKey(data.targetId, data.socket, Number(data.windowId));
+  if (hasSelectedWindow() && key === paneLiveKey(state.selectedTargetId, state.selectedSocket, Number(state.selectedWindowId))) {
+    requestLiveRefresh();
+  }
+  secondaryViewers.forEach((viewer) => {
+    if (paneLiveKey(viewer.actor.targetId, viewer.actor.socket, viewer.actor.windowId) === key) {
+      viewer.trigger();
+    }
+  });
+}
+
+// Coalesce bursts: one refresh in flight, at most one queued, and a minimum
+// gap per extent so "All" never re-downloads history on every output chunk.
+function requestLiveRefresh() {
+  if (liveRefreshRunning) {
+    liveRefreshPending = true;
+    return;
+  }
+  const gap = LIVE_MIN_GAP_MS[activeExtent()] || LIVE_MIN_GAP_MS.screen;
+  const wait = Math.max(0, lastLiveRefreshAt + gap - Date.now());
+  if (liveRefreshTimer) {
+    return;
+  }
+  liveRefreshTimer = setTimeout(runLiveRefresh, wait);
+}
+
+async function runLiveRefresh() {
+  liveRefreshTimer = null;
+  if (!state.selectedTargetId || !hasSelectedWindow() || document.hidden) {
+    return;
+  }
+  if (activeExtent() === "all" && !state.allTextFollowTail) {
+    return;
+  }
+  liveRefreshRunning = true;
+  lastLiveRefreshAt = Date.now();
+  try {
+    await refreshScreen({ force: true });
+  } catch (error) {
+    setStatus(error.message, "danger");
+  } finally {
+    liveRefreshRunning = false;
+  }
+  if (liveRefreshPending) {
+    liveRefreshPending = false;
+    requestLiveRefresh();
+  }
+}
+
 function stopPolling() {
   pollGeneration += 1;
   if (pollTimer) {
@@ -3637,6 +4137,9 @@ function stopPolling() {
 }
 
 function getPollDelayMs() {
+  if (isPrimaryLive()) {
+    return LIVE_POLL_MS;
+  }
   const quietFor = Date.now() - lastScreenActivityAt;
   if (quietFor < POLL_ACTIVE_WINDOW_MS) {
     return POLL_ACTIVE_MS;
@@ -3693,19 +4196,21 @@ function restartPolling() {
 // Called when the pane output changes or input is sent: speeds polling back up.
 function noteScreenActivity() {
   lastScreenActivityAt = Date.now();
-  if (pollTimer && state.autoRefresh) {
+  if (pollTimer && state.autoRefresh && !isPrimaryLive()) {
     schedulePoll(POLL_ACTIVE_MS);
   }
 }
 
 function handleVisibilityChange() {
   if (document.hidden) {
+    closeLiveSource();
     if (pollTimer) {
       clearTimeout(pollTimer);
       pollTimer = null;
     }
     return;
   }
+  syncLiveSubscriptions();
 
   // An in-flight tick reschedules itself once it finishes.
   if (state.autoRefresh && state.authenticated && !pollTimer && !pollInFlight) {
@@ -3774,8 +4279,28 @@ function renderTerminalText(text) {
   return linkifyTerminalText(text);
 }
 
+// Draw terminal text as one block per line and only touch the lines that
+// changed since the previous draw into the same element. tmux starts every
+// captured line from default attributes, so lines render independently.
+function renderTerminalLines(output, text, placeholder) {
+  if (!text) {
+    output.textContent = placeholder;
+    output.__renderedLines = null;
+    return;
+  }
+  TERMINAL_LINES.renderLines(output, TERMINAL_LINES.splitLines(text), renderTerminalText);
+}
+
 function attachWheelContainment() {
-  document.querySelectorAll(".scroll-panel").forEach((panel) => {
+  document.querySelectorAll(".scroll-panel").forEach(attachWheelContainmentTo);
+}
+
+function attachWheelContainmentTo(panel) {
+  if (panel.__wheelContained) {
+    return;
+  }
+  panel.__wheelContained = true;
+  {
     panel.addEventListener(
       "wheel",
       (event) => {
@@ -3791,7 +4316,7 @@ function attachWheelContainment() {
       },
       { passive: true }
     );
-  });
+  }
 }
 
 function setSidebarView(view) {
@@ -4088,16 +4613,6 @@ function attachEvents() {
       handleSessionCloseClick(event).catch((error) => setStatus(error.message, "danger"));
     }
   });
-  elements.screenOutput.addEventListener("click", async (event) => {
-    const paneNode = event.target.closest?.(".tmux-pane");
-    if (!paneNode || window.getSelection()?.toString()) {
-      return;
-    }
-    const paneId = Number(paneNode.dataset.layoutPaneId);
-    if (paneId !== Number(state.selectedWindowId)) {
-      await selectWindow(paneId);
-    }
-  });
   elements.sessionTree.addEventListener("pointerdown", handleSessionPointerDown);
   elements.sessionTree.addEventListener("pointerup", (event) => {
     handleSessionPointerUp(event).catch((error) => setStatus(error.message, "danger"));
@@ -4106,26 +4621,7 @@ function attachEvents() {
     sessionPointerStart = null;
   });
 
-  elements.screenOutput.addEventListener("wheel", queueRemoteScrollFromWheel, { passive: false });
-  elements.screenOutput.addEventListener("touchstart", handleScreenTouchStart, { passive: true });
-  elements.screenOutput.addEventListener("touchmove", handleScreenTouchMove, { passive: false });
-  elements.screenOutput.addEventListener("touchend", handleScreenTouchEnd, { passive: true });
-  elements.screenOutput.addEventListener("touchcancel", handleScreenTouchEnd, { passive: true });
-  elements.screenOutput.addEventListener("scroll", handleScreenOutputScroll, { passive: true });
-  elements.screenOutput.addEventListener("click", async (event) => {
-    const link = event.target.closest?.("[data-preview-url]");
-    if (!link) {
-      return;
-    }
-
-    event.preventDefault();
-
-    try {
-      await loadUrlPreview(link.dataset.previewUrl, { history: "reset" });
-    } catch (error) {
-      setPreviewStatus(error.message, "danger");
-    }
-  });
+  bindOutputElement(originalScreenOutput);
 
   elements.closePreviewBtn.addEventListener("click", closePreview);
   elements.mobileBrowserBackBtn.addEventListener("click", closePreview);
@@ -4378,7 +4874,8 @@ function attachEvents() {
   });
   // Sidebar, browser drawer and bottom panel drags change the output box without a window resize.
   if (typeof ResizeObserver === "function") {
-    new ResizeObserver(() => scheduleAutoFit()).observe(elements.screenOutput);
+    outputResizeObserver = new ResizeObserver(() => scheduleAutoFit());
+    outputResizeObserver.observe(elements.screenOutput);
   }
   window.addEventListener("popstate", handleMobileHistoryChange);
   document.addEventListener("visibilitychange", handleVisibilityChange);
