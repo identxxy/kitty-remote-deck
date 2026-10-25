@@ -4,7 +4,7 @@ const CLIENT_BUILD = "0.2.1";
 const MOBILE_HISTORY_KEY = "krdMobileScreen";
 const LAST_PANE_STORAGE_KEY = "kitty-remote-deck-last-pane";
 const FONT_SIZE_RANGE = { min: 5, max: 18, default: 13 };
-const THEME_SET = new Set(["dark", "graphite", "light"]);
+const THEME_SET = new Set(["dark", "graphite", "nord", "mocha", "tokyo", "gruvbox", "rosepine", "light", "latte", "solarized"]);
 const TEXT_EXTENT_SET = new Set(["screen", "all"]);
 const MOBILE_TERMINAL_WIDTH_SET = new Set(["fit", "wide"]);
 const MOBILE_SCREEN_SET = new Set(["connect", "sessions", "chat", "browser"]);
@@ -180,6 +180,10 @@ const elements = {
   increaseFontBtn: document.querySelector("#increaseFontBtn"),
   fontSizeValue: document.querySelector("#fontSizeValue"),
   themeSelect: document.querySelector("#themeSelect"),
+  themeSelectMobile: document.querySelector("#themeSelectMobile"),
+  decreaseFontBtnMobile: document.querySelector("#decreaseFontBtnMobile"),
+  increaseFontBtnMobile: document.querySelector("#increaseFontBtnMobile"),
+  fontSizeValueMobile: document.querySelector("#fontSizeValueMobile"),
   resizeToggle: document.querySelector("#resizeToggle"),
   resizeLabel: document.querySelector("#resizeLabel"),
   targetHealth: document.querySelector("#targetHealth"),
@@ -1074,6 +1078,15 @@ function applyUiState() {
   elements.autoFitToggle.checked = state.autoFitPane;
   elements.fontSizeValue.textContent = `${state.uiFontSizePx}px`;
   elements.themeSelect.value = state.uiTheme;
+  if (elements.fontSizeValueMobile) {
+    elements.fontSizeValueMobile.textContent = `${state.uiFontSizePx}px`;
+  }
+  if (elements.themeSelectMobile) {
+    if (!elements.themeSelectMobile.options.length) {
+      elements.themeSelectMobile.innerHTML = elements.themeSelect.innerHTML;
+    }
+    elements.themeSelectMobile.value = state.uiTheme;
+  }
   elements.screenModeBtn.classList.toggle("active", state.screenExtent === "screen");
   elements.allTextModeBtn.classList.toggle("active", state.screenExtent === "all");
   elements.screenModeBtn.setAttribute("aria-pressed", String(state.screenExtent === "screen"));
@@ -1335,6 +1348,7 @@ function renderWindowLayout(data, options = {}) {
   const previousTop = output.scrollTop;
   const previousLeft = output.scrollLeft;
   state.screenText = drawWindowLayout(output, data, Number(state.selectedWindowId), paneTextsFor(output));
+  noteWindowSize(state.selectedWindowId, Number(data.window.columns), Number(data.window.rows));
   output.setAttribute("aria-busy", "false");
   output.dataset.paneId = hasSelectedWindow() ? String(state.selectedWindowId) : "";
   if (options.scrollToTop) {
@@ -2082,9 +2096,47 @@ function measureScreenCells() {
   };
 }
 
-let autoFitTimer = null;
+// With ?debug=1: the view geometry behind each auto-fit decision, appended to
+// tmp/client-debug.log on the server.
+function reportFitDiagnostics(info) {
+  if (!clientDebugEnabled) {
+    return;
+  }
+  try {
+    const output = elements.screenOutput;
+    const body = output.parentElement;
+    const cell = measureCellSize();
+    const payload = {
+      source: "krd-fit-diag",
+      build: CLIENT_BUILD,
+      ua: navigator.userAgent,
+      standalone: Boolean(navigator.standalone),
+      inner: { w: window.innerWidth, h: window.innerHeight },
+      output: { cw: output.clientWidth, ch: output.clientHeight, sh: output.scrollHeight, rect: output.getBoundingClientRect().toJSON() },
+      body: body ? { ch: body.clientHeight, rect: body.getBoundingClientRect().toJSON() } : null,
+      tree: elements.paneTree ? { ch: elements.paneTree.clientHeight } : null,
+      cell,
+      fontPx: state.uiFontSizePx,
+      autoFit: state.autoFitPane,
+      extent: activeExtent(),
+      ...info
+    };
+    fetch("/api/client-log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), keepalive: true }).catch(() => {});
+  } catch (error) {
+    // diagnostics only
+  }
+}
 
-function scheduleAutoFit() {
+let autoFitTimer = null;
+// Each local trigger (selection, viewport or font change, input, coming back
+// to the foreground) opens an epoch. A window size that this view did not set
+// (another deck client, or this one under an earlier layout) is re-fitted at
+// most once per epoch, so two decks on the same pane cannot fight for it:
+// the one the user is interacting with wins.
+let autoFitEpoch = 0;
+let externalFitEpoch = -1;
+
+function queueAutoFit() {
   if (autoFitTimer) {
     clearTimeout(autoFitTimer);
   }
@@ -2094,6 +2146,43 @@ function scheduleAutoFit() {
       fitPaneToScreen().catch((error) => setStatus(error.message, "danger"));
     }
   }, 500);
+}
+
+function scheduleAutoFit() {
+  autoFitEpoch += 1;
+  queueAutoFit();
+}
+
+// The selected pane's window is a size other than this view's cell grid.
+function scheduleExternalFit() {
+  if (!state.autoFitPane || externalFitEpoch === autoFitEpoch) {
+    return;
+  }
+  externalFitEpoch = autoFitEpoch;
+  queueAutoFit();
+}
+
+function selectedWindowFitsView() {
+  const pane = state.flatWindows.find((window) => Number(window.id) === Number(state.selectedWindowId));
+  const cells = pane && state.sessionBackend === "tmux" ? measureScreenCells() : null;
+  if (!cells) {
+    return true;
+  }
+  return (pane.window_columns || pane.columns) === cells.columns && (pane.window_lines || pane.lines) === cells.rows;
+}
+
+// Window size as reported by a screen capture; it may have changed since the
+// session tree was loaded.
+function noteWindowSize(windowId, columns, rows) {
+  const pane = state.flatWindows.find((window) => Number(window.id) === Number(windowId));
+  if (!pane || !columns || !rows) {
+    return;
+  }
+  pane.window_columns = columns;
+  pane.window_lines = rows;
+  if (Number(windowId) === Number(state.selectedWindowId) && !selectedWindowFitsView()) {
+    scheduleExternalFit();
+  }
 }
 
 async function fitPaneToScreen(options = {}) {
@@ -2108,17 +2197,18 @@ async function fitPaneToScreen(options = {}) {
   }
   const pane = state.flatWindows.find((window) => Number(window.id) === Number(state.selectedWindowId));
   const cells = measureScreenCells();
-  if (!pane || !cells) {
-    return null;
-  }
-  // Automatic mode never fights an attached terminal for the window size.
-  if (!options.force && (pane.is_attached || pane.osWindowFocused)) {
-    return null;
-  }
   // Split panes share the window, so the window is what must match the view.
-  const windowColumns = pane.window_columns || pane.columns;
-  const windowLines = pane.window_lines || pane.lines;
-  if (!options.force && windowColumns === cells.columns && windowLines === cells.rows) {
+  const windowColumns = pane ? pane.window_columns || pane.columns : 0;
+  const windowLines = pane ? pane.window_lines || pane.lines : 0;
+  const skip = !pane || !cells
+    ? "no pane or cells"
+    : !options.force && (pane.is_attached || pane.osWindowFocused)
+      ? "attached"
+      : !options.force && windowColumns === cells.columns && windowLines === cells.rows
+        ? "same size"
+        : "";
+  reportFitDiagnostics({ skip, cells, windowColumns, windowLines, force: Boolean(options.force) });
+  if (skip) {
     return null;
   }
 
@@ -3450,6 +3540,9 @@ async function loadSessions(options = {}) {
   setTargetHealth("Connected", "success");
   updateStatusBar();
   sendClientDebug("loadSessions:rendered", null, { force: true });
+  if (hasSelectedWindow() && !selectedWindowChanged && !selectedWindowFitsView()) {
+    scheduleExternalFit();
+  }
 
   if (hasSelectedWindow() && !deferPaneRefresh) {
     if (options.refreshPane !== false) {
@@ -3740,7 +3833,7 @@ async function sendText(options = {}) {
   }
 
   const pane = captureSelectedPane();
-
+  scheduleAutoFit();
   await apiFetch("/api/send-text", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -3849,6 +3942,7 @@ async function sendKey(key, repeat = 1) {
   }
 
   const pane = captureSelectedPane();
+  scheduleAutoFit();
   await apiFetch("/api/send-key", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -4211,6 +4305,7 @@ function handleVisibilityChange() {
     return;
   }
   syncLiveSubscriptions();
+  scheduleAutoFit();
 
   // An in-flight tick reschedules itself once it finishes.
   if (state.autoRefresh && state.authenticated && !pollTimer && !pollInFlight) {
@@ -4485,6 +4580,13 @@ function attachEvents() {
     stepFontSize(1);
   });
 
+  // The phone copies of the appearance controls drive the top-bar originals.
+  elements.decreaseFontBtnMobile?.addEventListener("click", () => elements.decreaseFontBtn.click());
+  elements.increaseFontBtnMobile?.addEventListener("click", () => elements.increaseFontBtn.click());
+  elements.themeSelectMobile?.addEventListener("change", () => {
+    elements.themeSelect.value = elements.themeSelectMobile.value;
+    elements.themeSelect.dispatchEvent(new Event("change"));
+  });
   elements.themeSelect.addEventListener("change", () => {
     const nextTheme = elements.themeSelect.value;
     state.uiTheme = THEME_SET.has(nextTheme) ? nextTheme : "dark";

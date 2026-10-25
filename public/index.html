@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Kitty Remote Deck</title>
-    <link rel="stylesheet" href="/styles.css?v=0.2.5" />
+    <link rel="stylesheet" href="/styles.css?v=0.2.9" />
   </head>
   <body>
     <div class="app-shell" id="appShell">
@@ -28,9 +28,20 @@
             <label class="theme-control" title="Theme">
               <span class="theme-dot" aria-hidden="true"></span>
               <select id="themeSelect" aria-label="Theme">
-                <option value="dark">Dark</option>
-                <option value="graphite">Graphite</option>
-                <option value="light">Light</option>
+                <optgroup label="Dark">
+                  <option value="dark">Dark</option>
+                  <option value="graphite">Graphite</option>
+                  <option value="nord">Nord</option>
+                  <option value="mocha">Catppuccin Mocha</option>
+                  <option value="tokyo">Tokyo Night</option>
+                  <option value="gruvbox">Gruvbox</option>
+                  <option value="rosepine">Rosé Pine</option>
+                </optgroup>
+                <optgroup label="Light">
+                  <option value="light">Light</option>
+                  <option value="latte">Catppuccin Latte</option>
+                  <option value="solarized">Solarized Light</option>
+                </optgroup>
               </select>
             </label>
 
@@ -207,6 +218,18 @@
                 <div class="editor-menu" id="editorMenu">
                   <button class="ghost-button editor-menu-button" id="editorMenuBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="View options" title="View options">⋯</button>
                   <div class="editor-menu-popover" id="editorMenuPopover" role="menu" hidden>
+                    <p class="special-key-group-label editor-menu-mobile-only">Appearance</p>
+                    <div class="editor-menu-row editor-menu-mobile-only editor-menu-appearance">
+                      <div class="segmented-control font-control" aria-label="Font size">
+                        <button class="toolbar-button" id="decreaseFontBtnMobile" type="button" title="Decrease font size">A-</button>
+                        <span class="font-size-value" id="fontSizeValueMobile" title="Font size">13px</span>
+                        <button class="toolbar-button" id="increaseFontBtnMobile" type="button" title="Increase font size">A+</button>
+                      </div>
+                      <label class="theme-control editor-menu-theme" title="Theme">
+                        <span class="theme-dot" aria-hidden="true"></span>
+                        <select id="themeSelectMobile" aria-label="Theme"></select>
+                      </label>
+                    </div>
                     <p class="special-key-group-label">Text</p>
                     <div class="segmented-control editor-mode-control" aria-label="Editor text extent">
                       <button class="mode-button active" id="allTextModeBtn" type="button" aria-pressed="true">All</button>
@@ -377,6 +400,6 @@
     <script src="/modules/pane-tree.js?v=0.2.1"></script>
     <script src="/modules/terminal-lines.js?v=0.2.2"></script>
     <script src="/modules/ansi-utils.js?v=0.2.1"></script>
-    <script src="/app.js?v=0.2.7"></script>
+    <script src="/app.js?v=0.2.12"></script>
   </body>
 </html>

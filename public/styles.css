@@ -76,6 +76,186 @@
   --shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
 }
 
+/* ---- Additional palettes ------------------------------------------------ */
+/* Each theme overrides the same variable set; the theme dot follows --accent. */
+
+:root[data-theme="nord"] {
+  --app-bg: #2e3440;
+  --chrome-bg: #3b4252;
+  --chrome-bg-strong: #434c5e;
+  --sidebar-bg: #2e3440;
+  --editor-bg: #272c36;
+  --panel-bg: #3b4252;
+  --field-bg: #434c5e;
+  --hover-bg: #4c566a;
+  --active-bg: #4c566a;
+  --line: #434c5e;
+  --line-strong: #616e88;
+  --text: #d8dee9;
+  --text-strong: #eceff4;
+  --muted: #9aa5b8;
+  --accent: #88c0d0;
+  --accent-strong: #8fbcbb;
+  --amber: #ebcb8b;
+  --danger: #bf616a;
+  --success: #a3be8c;
+  --warning: #ebcb8b;
+  --status-bg: #5e81ac;
+  --status-text: #eceff4;
+}
+
+:root[data-theme="mocha"] {
+  --app-bg: #181825;
+  --chrome-bg: #1e1e2e;
+  --chrome-bg-strong: #313244;
+  --sidebar-bg: #181825;
+  --editor-bg: #11111b;
+  --panel-bg: #1e1e2e;
+  --field-bg: #313244;
+  --hover-bg: #45475a;
+  --active-bg: #45475a;
+  --line: #313244;
+  --line-strong: #585b70;
+  --text: #cdd6f4;
+  --text-strong: #ffffff;
+  --muted: #a6adc8;
+  --accent: #89b4fa;
+  --accent-strong: #b4befe;
+  --amber: #fab387;
+  --danger: #f38ba8;
+  --success: #a6e3a1;
+  --warning: #f9e2af;
+  --status-bg: #45475a;
+  --status-text: #cdd6f4;
+}
+
+:root[data-theme="tokyo"] {
+  --app-bg: #16161e;
+  --chrome-bg: #1a1b26;
+  --chrome-bg-strong: #24283b;
+  --sidebar-bg: #16161e;
+  --editor-bg: #1a1b26;
+  --panel-bg: #1f2335;
+  --field-bg: #24283b;
+  --hover-bg: #292e42;
+  --active-bg: #33467c;
+  --line: #292e42;
+  --line-strong: #3b4261;
+  --text: #c0caf5;
+  --text-strong: #e6ecff;
+  --muted: #7982a9;
+  --accent: #7aa2f7;
+  --accent-strong: #7dcfff;
+  --amber: #ff9e64;
+  --danger: #f7768e;
+  --success: #9ece6a;
+  --warning: #e0af68;
+  --status-bg: #3d59a1;
+  --status-text: #e6ecff;
+}
+
+:root[data-theme="gruvbox"] {
+  --app-bg: #1d2021;
+  --chrome-bg: #282828;
+  --chrome-bg-strong: #3c3836;
+  --sidebar-bg: #1d2021;
+  --editor-bg: #1d2021;
+  --panel-bg: #282828;
+  --field-bg: #3c3836;
+  --hover-bg: #504945;
+  --active-bg: #504945;
+  --line: #3c3836;
+  --line-strong: #665c54;
+  --text: #ebdbb2;
+  --text-strong: #fbf1c7;
+  --muted: #a89984;
+  --accent: #83a598;
+  --accent-strong: #8ec07c;
+  --amber: #d79921;
+  --danger: #fb4934;
+  --success: #b8bb26;
+  --warning: #fabd2f;
+  --status-bg: #458588;
+  --status-text: #fbf1c7;
+}
+
+:root[data-theme="rosepine"] {
+  --app-bg: #191724;
+  --chrome-bg: #1f1d2e;
+  --chrome-bg-strong: #26233a;
+  --sidebar-bg: #191724;
+  --editor-bg: #16141f;
+  --panel-bg: #1f1d2e;
+  --field-bg: #26233a;
+  --hover-bg: #2a273f;
+  --active-bg: #393552;
+  --line: #26233a;
+  --line-strong: #524f67;
+  --text: #e0def4;
+  --text-strong: #ffffff;
+  --muted: #908caa;
+  --accent: #c4a7e7;
+  --accent-strong: #9ccfd8;
+  --amber: #f6c177;
+  --danger: #eb6f92;
+  --success: #9ccfd8;
+  --warning: #f6c177;
+  --status-bg: #31748f;
+  --status-text: #e0def4;
+}
+
+:root[data-theme="latte"] {
+  --app-bg: #e6e9ef;
+  --chrome-bg: #eff1f5;
+  --chrome-bg-strong: #ffffff;
+  --sidebar-bg: #e6e9ef;
+  --editor-bg: #eff1f5;
+  --panel-bg: #e6e9ef;
+  --field-bg: #ffffff;
+  --hover-bg: #ccd0da;
+  --active-bg: #bcc0cc;
+  --line: #ccd0da;
+  --line-strong: #9ca0b0;
+  --text: #4c4f69;
+  --text-strong: #1e1e2e;
+  --muted: #6c6f85;
+  --accent: #1e66f5;
+  --accent-strong: #209fb5;
+  --amber: #fe640b;
+  --danger: #d20f39;
+  --success: #40a02b;
+  --warning: #df8e1d;
+  --status-bg: #1e66f5;
+  --status-text: #ffffff;
+  --shadow: 0 10px 24px rgba(76, 79, 105, 0.16);
+}
+
+:root[data-theme="solarized"] {
+  --app-bg: #eee8d5;
+  --chrome-bg: #fdf6e3;
+  --chrome-bg-strong: #fffbf0;
+  --sidebar-bg: #eee8d5;
+  --editor-bg: #fdf6e3;
+  --panel-bg: #f5efdc;
+  --field-bg: #fffbf0;
+  --hover-bg: #e4ddc6;
+  --active-bg: #d9d2bb;
+  --line: #d9d2bb;
+  --line-strong: #93a1a1;
+  --text: #586e75;
+  --text-strong: #073642;
+  --muted: #839496;
+  --accent: #268bd2;
+  --accent-strong: #2aa198;
+  --amber: #cb4b16;
+  --danger: #dc322f;
+  --success: #859900;
+  --warning: #b58900;
+  --status-bg: #268bd2;
+  --status-text: #fdf6e3;
+  --shadow: 0 10px 24px rgba(7, 54, 66, 0.14);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -2273,13 +2453,42 @@ textarea::-webkit-scrollbar-thumb:hover {
     padding: 0 8px;
   }
 
-  .theme-control select {
+  .topbar .theme-control select {
     display: none;
   }
 
   .toolbar-button {
     min-width: 28px;
     padding: 0 6px;
+  }
+}
+
+/* Appearance controls live in the top bar; on phones the top bar is hidden, so
+   the same controls appear at the top of the ⋯ view menu instead. */
+.editor-menu-mobile-only {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .editor-menu-mobile-only {
+    display: block;
+  }
+
+  .editor-menu-appearance {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .editor-menu-theme {
+    flex: 1 1 140px;
+    min-width: 0;
+  }
+
+  .editor-menu-theme select {
+    width: 100%;
+    min-width: 0;
   }
 }
 
@@ -2390,6 +2599,18 @@ textarea::-webkit-scrollbar-thumb:hover {
   min-height: 0;
 }
 
+/* Placed explicitly: in a single view the head is display:none, and an
+   auto-placed body would land in the `auto` row and shrink to its content
+   (the view then measured as many rows as it already showed, so auto-fit
+   never changed anything, and a loading placeholder measured 5 rows). */
+.pane-slot-head {
+  grid-row: 1;
+}
+
+.pane-slot-body {
+  grid-row: 2;
+}
+
 .pane-slot-head {
   display: flex;
   align-items: center;
@@ -2435,14 +2656,15 @@ textarea::-webkit-scrollbar-thumb:hover {
   border-radius: 0 0 8px 8px;
 }
 
-/* The raised view also sits on a slightly lighter, accent-tinted ground. */
+/* The raised view keeps the editor background; the views that are not the
+   input target recede onto a slightly greyer, washed-out ground. */
 .pane-tree:not(.single) .pane-slot .screen-output {
   transition: background-color 240ms ease;
 }
 
-.pane-tree:not(.single) .pane-slot.active,
-.pane-tree:not(.single) .pane-slot.active .screen-output {
-  background: color-mix(in srgb, var(--editor-bg) 88%, var(--accent) 12%);
+.pane-tree:not(.single) .pane-slot:not(.active),
+.pane-tree:not(.single) .pane-slot:not(.active) .screen-output {
+  background: color-mix(in srgb, var(--editor-bg) 88%, #c8ccd1 12%);
 }
 
 .pane-tree:not(.single) .pane-slot.active {
