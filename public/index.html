@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Kitty Remote Deck</title>
-    <link rel="stylesheet" href="/styles.css?v=0.2.10" />
+    <link rel="stylesheet" href="/styles.css?v=0.2.12" />
   </head>
   <body>
     <div class="app-shell" id="appShell">
@@ -64,12 +64,29 @@
       <div class="workbench">
         <nav class="activity-bar" aria-label="Workbench views">
           <button class="activity-item active" id="showSshViewBtn" type="button" data-view="ssh" aria-label="Connect view" title="Connect">
-            <span class="activity-icon" aria-hidden="true">🔗</span>
+            <svg class="activity-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <rect x="3" y="4" width="18" height="6.5" rx="1.5"></rect>
+              <rect x="3" y="13.5" width="18" height="6.5" rx="1.5"></rect>
+              <path d="M7 7.25h.01M7 16.75h.01"></path>
+            </svg>
             <span class="sr-only">Connect</span>
           </button>
-          <button class="activity-item" id="showSessionsViewBtn" type="button" data-view="sessions" aria-label="Session view" title="KT Sessions">
-            <span class="activity-icon">▦</span>
-            <span class="sr-only">Session</span>
+          <button class="activity-item" id="showSessionsViewBtn" type="button" data-view="sessions" aria-label="Sessions view" title="Sessions">
+            <svg class="activity-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+              <path d="m7 9 3 3-3 3"></path>
+              <path d="M12 15h5"></path>
+            </svg>
+            <span class="sr-only">Sessions</span>
+          </button>
+          <button class="activity-item" id="showProfilesViewBtn" type="button" data-view="profiles" aria-label="Profiles view" title="Profiles">
+            <svg class="activity-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+              <path d="M12 4v16"></path>
+              <path d="M12 12h9"></path>
+              <path d="M6 9h3"></path>
+            </svg>
+            <span class="sr-only">Profiles</span>
           </button>
         </nav>
 
@@ -78,10 +95,11 @@
             <div class="sidebar-head">
               <button class="mobile-back-button" id="mobileBackToConnectBtn" type="button">‹ Connect</button>
               <div>
-                <p class="section-kicker">KT Sessions</p>
+                <p class="section-kicker">Sessions</p>
                 <h2>Session Explorer</h2>
               </div>
               <div class="sidebar-head-actions">
+                <button class="ghost-button head-text-button" id="saveProfileBtn" type="button" title="Save the current views and panes as a named profile">Save profile</button>
                 <button class="icon-button" id="reloadSessionTreeBtn" type="button" aria-label="Refresh sessions">↻</button>
               </div>
             </div>
@@ -98,13 +116,41 @@
             <div class="session-tree scroll-panel" id="sessionTree"></div>
           </section>
 
+          <section class="sidebar-view" id="profilesSidebarView" hidden>
+            <div class="sidebar-head">
+              <button class="mobile-back-button" id="mobileBackFromProfilesBtn" type="button">‹ Back</button>
+              <div>
+                <p class="section-kicker">Profiles</p>
+                <h2>Saved Layouts</h2>
+              </div>
+              <div class="sidebar-head-actions">
+                <button class="icon-button" id="reloadProfilesBtn" type="button" aria-label="Reload profiles">↻</button>
+              </div>
+            </div>
+
+            <form class="profile-save-form" id="profileSaveForm">
+              <label class="composer-field">
+                <span class="sr-only">Profile name</span>
+                <input id="profileNameInput" type="text" maxlength="60" placeholder="Name the current layout…" autocomplete="off" />
+              </label>
+              <button class="secondary-button" id="profileSaveSubmitBtn" type="submit">Save</button>
+            </form>
+
+            <div class="status-panel subtle" id="profileSummary">Save the current views and their panes as a profile, then load it from any device.</div>
+
+            <div class="profile-list scroll-panel" id="profileList"></div>
+          </section>
+
           <section class="sidebar-view ssh-sidebar-view" id="sshSidebarView">
             <div class="sidebar-head">
               <div>
                 <p class="section-kicker">Connection Targets</p>
                 <h2>Connect</h2>
               </div>
-              <button class="icon-button" id="reloadTargetsBtn" type="button" aria-label="Reload targets">↻</button>
+              <div class="sidebar-head-actions">
+                <button class="ghost-button head-text-button mobile-only-button" id="mobileProfilesBtn" type="button">Profiles</button>
+                <button class="icon-button" id="reloadTargetsBtn" type="button" aria-label="Reload targets">↻</button>
+              </div>
             </div>
 
             <section class="ssh-target-summary">
@@ -400,6 +446,6 @@
     <script src="/modules/pane-tree.js?v=0.2.1"></script>
     <script src="/modules/terminal-lines.js?v=0.2.2"></script>
     <script src="/modules/ansi-utils.js?v=0.2.1"></script>
-    <script src="/app.js?v=0.2.13"></script>
+    <script src="/app.js?v=0.2.15"></script>
   </body>
 </html>

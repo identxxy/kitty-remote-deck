@@ -82,3 +82,31 @@ test("invocation payload carries the backend and tmux binary", () => {
   assert.equal(payload.tmuxBinary, "/usr/bin/tmux");
   assert.equal(payload.socketPattern, "");
 });
+
+test("helper output split inside a multibyte character decodes intact", async () => {
+  const { EventEmitter } = await import("node:events");
+  const text = JSON.stringify({ ok: true, data: { text: "─".repeat(5) + "中文" } });
+  const bytes = Buffer.from(text, "utf8");
+  const cut = bytes.indexOf(Buffer.from("─")) + 1; // inside the 3-byte box character
+  const spawnImpl = () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { end() {} };
+    child.kill = () => {};
+    setImmediate(() => {
+      child.stdout.emit("data", bytes.subarray(0, cut));
+      child.stdout.emit("data", bytes.subarray(cut));
+      child.emit("close", 0);
+    });
+    return child;
+  };
+  const data = await runner.runKittyAction(
+    { transport: "local", kittyBinary: "kitty", socketPattern: "/tmp/kitty.sock-*", defaultSocket: "" },
+    "get_screen",
+    { socket: "" },
+    { spawnImpl, helperSource: "helper source" }
+  );
+  assert.equal(data.text, "─".repeat(5) + "中文");
+  assert.doesNotMatch(data.text, /�/);
+});

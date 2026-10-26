@@ -549,9 +549,14 @@ button {
 }
 
 .activity-icon {
+  width: 22px;
+  height: 22px;
   color: currentColor;
-  font-size: 1.45rem;
-  line-height: 1;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .activity-text-icon {
@@ -601,6 +606,125 @@ button {
 
 #sshSidebarView {
   grid-template-rows: auto auto minmax(84px, 0.28fr) minmax(0, 1fr) auto;
+}
+
+#profilesSidebarView {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.head-text-button {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.mobile-only-button {
+  display: none;
+}
+
+.profile-save-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.profile-save-form input {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--field-bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.profile-list {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: auto;
+}
+
+.profile-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--field-bg), transparent 30%);
+}
+
+.profile-row.active {
+  border-color: var(--accent);
+  background: var(--active-bg);
+}
+
+.profile-row.reserved {
+  border-style: dashed;
+}
+
+.profile-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--hover-bg);
+  color: var(--muted);
+  font-size: 0.72em;
+  font-weight: 500;
+  vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.profile-row-main {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.profile-row-main:hover {
+  background: var(--hover-bg);
+}
+
+.profile-row-main strong {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-strong);
+  font-weight: 650;
+}
+
+.profile-row-main small {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+
+.profile-row-actions {
+  display: inline-flex;
+  gap: 2px;
+  padding-right: 4px;
+}
+
+.profile-row-actions .icon-button {
+  width: 28px;
+  height: 28px;
 }
 
 .ssh-sidebar-view {
@@ -2136,20 +2260,23 @@ textarea::-webkit-scrollbar-thumb:hover {
   }
 
   .app-shell.mobile-screen-connect .primary-sidebar,
-  .app-shell.mobile-screen-sessions .primary-sidebar {
+  .app-shell.mobile-screen-sessions .primary-sidebar,
+  .app-shell.mobile-screen-profiles .primary-sidebar {
     display: block;
     pointer-events: auto !important;
   }
 
   .app-shell.mobile-screen-connect .primary-sidebar *,
-  .app-shell.mobile-screen-sessions .primary-sidebar * {
+  .app-shell.mobile-screen-sessions .primary-sidebar *,
+  .app-shell.mobile-screen-profiles .primary-sidebar * {
     pointer-events: auto;
   }
 
   .app-shell.mobile-screen-chat .primary-sidebar,
   .app-shell.mobile-screen-browser .primary-sidebar,
   .app-shell.mobile-screen-connect .editor-region,
-  .app-shell.mobile-screen-sessions .editor-region {
+  .app-shell.mobile-screen-sessions .editor-region,
+  .app-shell.mobile-screen-profiles .editor-region {
     display: none;
   }
 
@@ -2172,6 +2299,17 @@ textarea::-webkit-scrollbar-thumb:hover {
 
   #sshSidebarView {
     grid-template-rows: auto auto minmax(88px, 0.25fr) minmax(0, 1fr) auto;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+  }
+
+  .mobile-only-button {
+    display: inline-flex;
+  }
+
+  #profilesSidebarView {
+    grid-template-rows: auto auto auto minmax(0, 1fr);
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     touch-action: pan-y;
@@ -2379,7 +2517,8 @@ textarea::-webkit-scrollbar-thumb:hover {
   }
 
   .app-shell.mobile-screen-connect .preview-drawer,
-  .app-shell.mobile-screen-sessions .preview-drawer {
+  .app-shell.mobile-screen-sessions .preview-drawer,
+  .app-shell.mobile-screen-profiles .preview-drawer {
     display: none;
     pointer-events: none;
   }
@@ -2434,7 +2573,8 @@ textarea::-webkit-scrollbar-thumb:hover {
   }
 
   .app-shell.mobile-screen-connect .preview-reopen-button,
-  .app-shell.mobile-screen-sessions .preview-reopen-button {
+  .app-shell.mobile-screen-sessions .preview-reopen-button,
+  .app-shell.mobile-screen-profiles .preview-reopen-button {
     display: none;
   }
 

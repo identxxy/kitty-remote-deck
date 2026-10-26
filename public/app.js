@@ -7,7 +7,7 @@ const FONT_SIZE_RANGE = { min: 5, max: 18, default: 13 };
 const THEME_SET = new Set(["dark", "graphite", "nord", "mocha", "tokyo", "gruvbox", "rosepine", "light", "latte", "solarized"]);
 const TEXT_EXTENT_SET = new Set(["screen", "all"]);
 const MOBILE_TERMINAL_WIDTH_SET = new Set(["fit", "wide"]);
-const MOBILE_SCREEN_SET = new Set(["connect", "sessions", "chat", "browser"]);
+const MOBILE_SCREEN_SET = new Set(["connect", "sessions", "profiles", "chat", "browser"]);
 const SIDEBAR_WIDTH_RANGE = { min: 220, max: 520 };
 // The chat composer grows with its text up to this height; 230 was the old fixed panel height.
 const PANEL_HEIGHT_RANGE = { min: 80, max: 420, default: 160, legacyDefault: 230 };
@@ -124,6 +124,15 @@ const state = {
   // view that the single-selection state below describes.
   paneRoot: null,
   activePaneId: null,
+  // Saved layouts from the server. activeProfileId names the one the current
+  // tree was loaded from until the tree changes; null means the reserved
+  // "Session" layout, which is the unnamed tree the Session Explorer edits.
+  // While a named profile is active, sessionLayout keeps that unnamed tree so
+  // the Sessions tab can bring it back.
+  profiles: [],
+  activeProfileId: null,
+  activeProfileRoot: "",
+  sessionLayout: null,
   allTextFollowTail: true,
   previewVisible: false,
   previewPinned: false,
@@ -162,9 +171,19 @@ const elements = {
   logoutBtn: document.querySelector("#logoutBtn"),
   showSshViewBtn: document.querySelector("#showSshViewBtn"),
   showSessionsViewBtn: document.querySelector("#showSessionsViewBtn"),
+  showProfilesViewBtn: document.querySelector("#showProfilesViewBtn"),
   primarySidebar: document.querySelector("#primarySidebar"),
   sshSidebarView: document.querySelector("#sshSidebarView"),
   sessionsSidebarView: document.querySelector("#sessionsSidebarView"),
+  profilesSidebarView: document.querySelector("#profilesSidebarView"),
+  saveProfileBtn: document.querySelector("#saveProfileBtn"),
+  mobileProfilesBtn: document.querySelector("#mobileProfilesBtn"),
+  mobileBackFromProfilesBtn: document.querySelector("#mobileBackFromProfilesBtn"),
+  reloadProfilesBtn: document.querySelector("#reloadProfilesBtn"),
+  profileSaveForm: document.querySelector("#profileSaveForm"),
+  profileNameInput: document.querySelector("#profileNameInput"),
+  profileSummary: document.querySelector("#profileSummary"),
+  profileList: document.querySelector("#profileList"),
   sidebarResizeHandle: document.querySelector("#sidebarResizeHandle"),
   panelResizeHandle: document.querySelector("#panelResizeHandle"),
   browserResizeHandle: document.querySelector("#browserResizeHandle"),
@@ -720,6 +739,8 @@ function normalizeFontSizePx(value) {
   return FONT_SIZE_RANGE.default;
 }
 
+const SIDEBAR_VIEW_SET = new Set(["ssh", "sessions", "profiles"]);
+
 function loadUiPreferences() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -740,7 +761,7 @@ function loadUiPreferences() {
       ? parsed.mobileTerminalWidth
       : "fit";
     state.resizeEnabled = Boolean(parsed.resizeEnabled);
-    state.activeSidebarView = ["ssh", "sessions"].includes(parsed.activeSidebarView)
+    state.activeSidebarView = SIDEBAR_VIEW_SET.has(parsed.activeSidebarView)
       ? parsed.activeSidebarView
       : "ssh";
     state.previewVisible = Boolean(parsed.previewVisible);
@@ -906,7 +927,7 @@ function setMobileScreen(screen, options = {}) {
   const nextScreen = MOBILE_SCREEN_SET.has(screen) ? screen : "connect";
   state.mobileScreen = nextScreen;
 
-  if (isMobileViewport() && ["connect", "sessions"].includes(nextScreen)) {
+  if (isMobileViewport() && ["connect", "sessions", "profiles"].includes(nextScreen)) {
     state.previewVisible = false;
     state.previewPinned = false;
   }
@@ -916,6 +937,9 @@ function setMobileScreen(screen, options = {}) {
     state.sidebarVisible = true;
   } else if (nextScreen === "sessions") {
     state.activeSidebarView = "sessions";
+    state.sidebarVisible = true;
+  } else if (nextScreen === "profiles") {
+    state.activeSidebarView = "profiles";
     state.sidebarVisible = true;
   } else {
     state.sidebarVisible = false;
@@ -1041,18 +1065,23 @@ function applyUiState() {
       state.activeSidebarView = "ssh";
     } else if (state.mobileScreen === "sessions") {
       state.activeSidebarView = "sessions";
+    } else if (state.mobileScreen === "profiles") {
+      state.activeSidebarView = "profiles";
     }
   }
 
   const showingSsh = state.activeSidebarView === "ssh";
   const showingSessions = state.activeSidebarView === "sessions";
+  const showingProfiles = state.activeSidebarView === "profiles";
   elements.sshSidebarView.hidden = !showingSsh;
   elements.sessionsSidebarView.hidden = !showingSessions;
+  elements.profilesSidebarView.hidden = !showingProfiles;
   elements.appShell.classList.toggle("sidebar-hidden", !state.sidebarVisible);
   elements.appShell.classList.toggle("preview-open", state.previewVisible);
   elements.appShell.classList.toggle("browser-pinned", state.previewVisible && state.previewPinned);
   elements.appShell.classList.toggle("mobile-screen-connect", state.mobileScreen === "connect");
   elements.appShell.classList.toggle("mobile-screen-sessions", state.mobileScreen === "sessions");
+  elements.appShell.classList.toggle("mobile-screen-profiles", state.mobileScreen === "profiles");
   elements.appShell.classList.toggle("mobile-screen-chat", state.mobileScreen === "chat");
   elements.appShell.classList.toggle("mobile-screen-browser", state.mobileScreen === "browser");
   elements.appShell.classList.toggle("mobile-terminal-wide", state.mobileTerminalWidth === "wide");
@@ -1060,6 +1089,8 @@ function applyUiState() {
   elements.showSessionsViewBtn.classList.toggle("active", state.sidebarVisible && showingSessions);
   elements.showSshViewBtn.setAttribute("aria-pressed", String(state.sidebarVisible && showingSsh));
   elements.showSessionsViewBtn.setAttribute("aria-pressed", String(state.sidebarVisible && showingSessions));
+  elements.showProfilesViewBtn.classList.toggle("active", state.sidebarVisible && showingProfiles);
+  elements.showProfilesViewBtn.setAttribute("aria-pressed", String(state.sidebarVisible && showingProfiles));
   elements.appShell.classList.toggle("resize-enabled", state.resizeEnabled);
   elements.previewDrawer.setAttribute("aria-hidden", String(!state.previewVisible));
   elements.reopenPreviewBtn.hidden = state.previewVisible || !state.previewUrl;
@@ -2278,6 +2309,12 @@ function loadPaneLayout() {
       const layout = PANE_TREE.decodePersistedPaneLayout(parsed);
       state.paneRoot = layout.paneRoot;
       state.activePaneId = layout.activePaneId;
+      if (typeof parsed.activeProfileId === "string" && layout.paneRoot) {
+        state.activeProfileId = parsed.activeProfileId;
+        state.activeProfileRoot = JSON.stringify(layout.paneRoot);
+        const stash = PANE_TREE.decodePersistedPaneLayout({ paneVersion: 1, ...(parsed.sessionLayout || {}) });
+        state.sessionLayout = stash.paneRoot ? stash : null;
+      }
     }
   } catch (error) {
     state.paneRoot = null;
@@ -2289,11 +2326,210 @@ function savePaneLayout() {
   try {
     localStorage.setItem(
       PANE_LAYOUT_STORAGE_KEY,
-      JSON.stringify({ paneVersion: 1, paneRoot: state.paneRoot, activePaneId: state.activePaneId })
+      JSON.stringify({
+        paneVersion: 1,
+        paneRoot: state.paneRoot,
+        activePaneId: state.activePaneId,
+        activeProfileId: state.activeProfileId || undefined,
+        sessionLayout: (state.activeProfileId && state.sessionLayout) || undefined
+      })
     );
   } catch (error) {
     // Storage can be unavailable; the layout then lasts for this page only.
   }
+  // The tree is "the profile" only while it still matches what was loaded;
+  // switching the active view alone keeps it, changing a split or pane does not.
+  // A changed tree becomes the unnamed Session layout.
+  if (state.activeProfileId && JSON.stringify(state.paneRoot) !== state.activeProfileRoot) {
+    state.activeProfileId = null;
+    state.activeProfileRoot = "";
+    state.sessionLayout = null;
+    savePaneLayout();
+    return;
+  }
+  // Keeps the reserved Session row's description current.
+  renderProfiles();
+}
+
+const SESSION_PROFILE_ID = "__session__";
+
+// The layout the reserved "Session" row stands for: the stashed tree while a
+// named profile is active, otherwise the current tree itself.
+function sessionLayoutSnapshot() {
+  if (state.activeProfileId && state.sessionLayout) {
+    return state.sessionLayout;
+  }
+  return state.paneRoot ? { paneRoot: state.paneRoot, activePaneId: state.activePaneId } : null;
+}
+
+// Switches back to the unnamed Session layout. Returns false when it was
+// already active, so callers can keep their usual tab behaviour.
+async function activateSessionLayout() {
+  if (!state.activeProfileId) {
+    return false;
+  }
+  const stash = state.sessionLayout;
+  state.activeProfileId = null;
+  state.activeProfileRoot = "";
+  state.sessionLayout = null;
+  if (stash) {
+    state.paneRoot = stash.paneRoot;
+    state.activePaneId = stash.activePaneId;
+  }
+  savePaneLayout();
+  renderProfiles();
+  if (stash) {
+    renderPaneTree();
+    await bindSelectionToActor(activeLeaf().actor);
+  }
+  setStatus("Back to the Session layout.", "neutral");
+  return true;
+}
+
+// Profiles: named pane trees saved on the server (data/profiles.json), so the
+// same layouts can be loaded from the desk, the iPad and the phone.
+async function loadProfiles() {
+  try {
+    const data = await apiFetch("/api/profiles");
+    state.profiles = Array.isArray(data.profiles) ? data.profiles : [];
+  } catch (error) {
+    state.profiles = [];
+    elements.profileSummary.textContent = `Profiles unavailable: ${error.message}`;
+  }
+  renderProfiles();
+}
+
+function describeProfile(profile) {
+  const leafNodes = PANE_TREE.leaves(profile.paneRoot);
+  const parts = leafNodes.map((leafNode) => {
+    const target = state.targets.find((item) => item.id === leafNode.actor.targetId);
+    const name = target ? target.name : leafNode.actor.targetId || "unbound";
+    return leafNode.actor.windowId === null ? name : `${name} #${leafNode.actor.windowId}`;
+  });
+  return `${leafNodes.length} view${leafNodes.length === 1 ? "" : "s"} · ${parts.join(", ")}`;
+}
+
+function renderProfiles() {
+  if (!elements.profileList) {
+    return;
+  }
+  const sessionSnapshot = sessionLayoutSnapshot();
+  const sessionRow = `
+    <div class="profile-row reserved ${state.activeProfileId ? "" : "active"}" data-profile-id="${SESSION_PROFILE_ID}">
+      <button class="profile-row-main" type="button" data-profile-action="load" title="Switch to the unnamed layout the Session Explorer edits">
+        <strong>Session <span class="profile-badge">reserved</span></strong>
+        <small>${escapeHtml(sessionSnapshot ? describeProfile(sessionSnapshot) : "No views yet")}</small>
+      </button>
+    </div>
+  `;
+  const emptyNote = state.profiles.length
+    ? ""
+    : `<p class="empty-note">No saved profiles yet. Arrange your views, then save them with a name above.</p>`;
+  elements.profileList.innerHTML = sessionRow + emptyNote + state.profiles
+    .map((profile) => {
+      const active = profile.id === state.activeProfileId ? "active" : "";
+      return `
+        <div class="profile-row ${active}" data-profile-id="${escapeHtml(profile.id)}">
+          <button class="profile-row-main" type="button" data-profile-action="load" title="Load this profile">
+            <strong>${escapeHtml(profile.name)}</strong>
+            <small>${escapeHtml(describeProfile(profile))}</small>
+          </button>
+          <div class="profile-row-actions">
+            <button class="icon-button" type="button" data-profile-action="overwrite" aria-label="Overwrite with the current layout" title="Overwrite with the current layout">⤓</button>
+            <button class="icon-button" type="button" data-profile-action="delete" aria-label="Delete profile" title="Delete profile">×</button>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function currentLayoutPayload() {
+  ensurePaneTree();
+  syncActivePaneActor();
+  return { paneRoot: state.paneRoot, activePaneId: state.activePaneId };
+}
+
+async function saveProfile(name, id = null) {
+  const layout = currentLayoutPayload();
+  const bound = PANE_TREE.leaves(layout.paneRoot).filter((leafNode) => leafNode.actor.windowId !== null);
+  if (!bound.length) {
+    setStatus("Pick a pane in at least one view before saving a profile.", "warning");
+    return null;
+  }
+  const data = await apiFetch("/api/profiles", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ profile: { id: id || undefined, name, ...layout } })
+  });
+  if (!state.activeProfileId) {
+    // Saved from the Session layout: that layout stays available as "Session".
+    state.sessionLayout = JSON.parse(JSON.stringify(layout));
+  }
+  state.activeProfileId = data.profile.id;
+  state.activeProfileRoot = JSON.stringify(state.paneRoot);
+  await loadProfiles();
+  setStatus(`Saved profile “${data.profile.name}”.`, "success");
+  return data.profile;
+}
+
+async function applyProfile(profileId) {
+  const profile = state.profiles.find((item) => item.id === profileId);
+  if (!profile) {
+    return;
+  }
+  const layout = PANE_TREE.decodePersistedPaneLayout({ paneVersion: 1, paneRoot: profile.paneRoot, activePaneId: profile.activePaneId });
+  if (!state.activeProfileId) {
+    state.sessionLayout = sessionLayoutSnapshot();
+  }
+  state.paneRoot = layout.paneRoot;
+  state.activePaneId = layout.activePaneId;
+  state.activeProfileId = profile.id;
+  state.activeProfileRoot = JSON.stringify(state.paneRoot);
+  savePaneLayout();
+  renderProfiles();
+  renderPaneTree();
+  await bindSelectionToActor(activeLeaf().actor);
+  if (isMobileViewport()) {
+    setMobileScreen("chat");
+  }
+  setStatus(`Loaded profile “${profile.name}”.`, "success");
+}
+
+async function deleteProfile(profileId) {
+  const profile = state.profiles.find((item) => item.id === profileId);
+  if (!profile || !window.confirm(`Delete profile “${profile.name}”?`)) {
+    return;
+  }
+  await apiFetch("/api/profiles/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: profileId })
+  });
+  if (state.activeProfileId === profileId) {
+    // The current tree carries on as the Session layout.
+    state.activeProfileId = null;
+    state.activeProfileRoot = "";
+    state.sessionLayout = null;
+    savePaneLayout();
+  }
+  await loadProfiles();
+  setStatus(`Deleted profile “${profile.name}”.`, "neutral");
+}
+
+// The "Save profile" button opens the Profiles view with the name field ready.
+function openProfileSaveForm() {
+  if (isMobileViewport()) {
+    setMobileScreen("profiles");
+  } else {
+    state.activeSidebarView = "profiles";
+    state.sidebarVisible = true;
+    applyUiState();
+  }
+  const active = state.profiles.find((item) => item.id === state.activeProfileId);
+  elements.profileNameInput.value = active ? active.name : "";
+  elements.profileNameInput.focus();
+  elements.profileNameInput.select();
 }
 
 function ensurePaneTree() {
@@ -4429,7 +4665,7 @@ function attachWheelContainmentTo(panel) {
 }
 
 function setSidebarView(view) {
-  const nextView = view === "ssh" ? "ssh" : "sessions";
+  const nextView = SIDEBAR_VIEW_SET.has(view) ? view : "sessions";
   if (state.sidebarVisible && state.activeSidebarView === nextView) {
     state.sidebarVisible = false;
   } else {
@@ -4560,8 +4796,86 @@ function attachEvents() {
     setSidebarView("ssh");
   });
 
-  elements.showSessionsViewBtn.addEventListener("click", () => {
+  elements.showSessionsViewBtn.addEventListener("click", async () => {
+    // The Session Explorer always shows the reserved Session layout.
+    if (await activateSessionLayout().catch((error) => (setStatus(error.message, "danger"), false))) {
+      state.activeSidebarView = "sessions";
+      state.sidebarVisible = true;
+      applyUiState();
+      return;
+    }
     setSidebarView("sessions");
+  });
+
+  elements.showProfilesViewBtn.addEventListener("click", () => {
+    setSidebarView("profiles");
+  });
+
+  elements.saveProfileBtn.addEventListener("click", () => {
+    openProfileSaveForm();
+  });
+
+  elements.mobileProfilesBtn.addEventListener("click", () => {
+    setMobileScreen("profiles");
+  });
+
+  elements.mobileBackFromProfilesBtn.addEventListener("click", () => {
+    // Back to the explorer when a target is connected, otherwise to Connect.
+    if (state.flatWindows.length) {
+      activateSessionLayout().catch((error) => setStatus(error.message, "danger"));
+    }
+    handleMobileBack(state.flatWindows.length ? "sessions" : "connect");
+  });
+
+  elements.reloadProfilesBtn.addEventListener("click", async () => {
+    await loadProfiles();
+    setStatus("Profiles reloaded.", "neutral");
+  });
+
+  elements.profileSaveForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const name = elements.profileNameInput.value.trim();
+    if (!name) {
+      elements.profileNameInput.focus();
+      return;
+    }
+    try {
+      // Saving under an existing name replaces that profile.
+      const existing = state.profiles.find((item) => item.name.toLowerCase() === name.toLowerCase());
+      const profile = await saveProfile(name, existing ? existing.id : null);
+      if (profile) {
+        elements.profileNameInput.value = "";
+      }
+    } catch (error) {
+      setStatus(error.message, "danger");
+    }
+  });
+
+  elements.profileList.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-profile-action]");
+    const row = event.target.closest("[data-profile-id]");
+    if (!button || !row) {
+      return;
+    }
+    const profileId = row.dataset.profileId;
+    try {
+      if (profileId === SESSION_PROFILE_ID) {
+        if (button.dataset.profileAction === "load") {
+          await activateSessionLayout();
+        }
+      } else if (button.dataset.profileAction === "load") {
+        await applyProfile(profileId);
+      } else if (button.dataset.profileAction === "overwrite") {
+        const profile = state.profiles.find((item) => item.id === profileId);
+        if (profile && window.confirm(`Overwrite profile “${profile.name}” with the current layout?`)) {
+          await saveProfile(profile.name, profileId);
+        }
+      } else if (button.dataset.profileAction === "delete") {
+        await deleteProfile(profileId);
+      }
+    } catch (error) {
+      setStatus(error.message, "danger");
+    }
   });
 
   elements.mobileBackToConnectBtn.addEventListener("click", () => {
@@ -4569,6 +4883,7 @@ function attachEvents() {
   });
 
   elements.mobileBackToSessionsBtn.addEventListener("click", () => {
+    activateSessionLayout().catch((error) => setStatus(error.message, "danger"));
     handleMobileBack("sessions");
   });
 
@@ -5011,6 +5326,7 @@ function attachEvents() {
 async function bootAuthenticatedWorkspace() {
   await loadTargets();
   renderPaneTree();
+  loadProfiles();
   state.mobileScreen = "connect";
   if (isMobileViewport()) {
     state.activeSidebarView = "ssh";

@@ -22,6 +22,7 @@ const {
 } = require("./server/url_proxy");
 const { createEtag, encodeBody, hashText, isFresh } = require("./server/response_encoding");
 const { WatcherRegistry, controlClientArgv } = require("./server/tmux_watcher");
+const { createProfileStore } = require("./server/profiles");
 const { splitLines, computeLineDelta } = require("./public/modules/terminal-lines");
 const {
   MAX_IMAGE_BYTES,
@@ -35,6 +36,8 @@ const ROOT_DIR = __dirname;
 const DATA_DIR = path.join(ROOT_DIR, "data");
 const TMP_DIR = path.join(ROOT_DIR, "tmp");
 const TARGETS_FILE = path.join(DATA_DIR, "targets.json");
+const PROFILES_FILE = path.join(DATA_DIR, "profiles.json");
+const profileStore = createProfileStore(PROFILES_FILE);
 const AUTH_FILE = process.env.KRD_AUTH_FILE || path.join(DATA_DIR, "auth.json");
 const CLIENT_DEBUG_LOG_FILE = path.join(TMP_DIR, "client-debug.log");
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
@@ -979,6 +982,26 @@ async function handleApi(request, response, requestUrl) {
 
       store.lastSelectedTargetId = body.targetId;
       await writeStore(store);
+      sendJson(response, 200, { ok: true });
+      return;
+    }
+
+    // Profiles: named view layouts shared by every device of this deck.
+    if (request.method === "GET" && requestUrl.pathname === "/api/profiles") {
+      sendJson(response, 200, { profiles: await profileStore.list() });
+      return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/api/profiles") {
+      const body = await parseRequestBody(request);
+      const profile = await profileStore.upsert(body.profile || body);
+      sendJson(response, 200, { profile });
+      return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/api/profiles/delete") {
+      const body = await parseRequestBody(request);
+      await profileStore.remove(String(body.id || ""));
       sendJson(response, 200, { ok: true });
       return;
     }

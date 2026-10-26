@@ -71,8 +71,11 @@ function runInvocation(invocation, options = {}) {
       windowsHide: true
     });
 
-    let stdout = "";
-    let stderr = "";
+    // Collected as bytes and decoded once: a multibyte character split across
+    // two chunks would otherwise decode as U+FFFD, corrupting CJK and box
+    // drawing in large captures.
+    const stdoutChunks = [];
+    const stderrChunks = [];
     let settled = false;
 
     const timer = setTimeout(() => {
@@ -84,11 +87,11 @@ function runInvocation(invocation, options = {}) {
     }, timeoutMs);
 
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
+      stdoutChunks.push(Buffer.from(chunk));
     });
 
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
+      stderrChunks.push(Buffer.from(chunk));
     });
 
     child.on("error", (error) => {
@@ -106,6 +109,8 @@ function runInvocation(invocation, options = {}) {
 
       settled = true;
       clearTimeout(timer);
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8");
+      const stderr = Buffer.concat(stderrChunks).toString("utf8");
 
       if (code !== 0) {
         reject(new Error(stderr.trim() || stdout.trim() || `${invocation.label} exited with code ${code}.`));
