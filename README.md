@@ -89,7 +89,7 @@ Edit the target in the Connect sidebar if your kitty binary or socket pattern di
 
 Set `Backend` to `tmux` for a host that runs tmux without a GUI, such as a headless GPU server. Transport works the same way: Local runs `tmux` on the server machine, SSH streams the helper to the target host. Leave `Socket Pattern` empty to discover live servers under `$TMUX_TMPDIR/tmux-UID/*` (stale socket files left by exited servers are skipped), or set it to a glob such as `/tmp/tmux-1000/*`. The Socket selector then switches between tmux servers (`tmux -L name` creates a separate socket per name).
 
-The Session Explorer keeps the same three-level layout with tmux names: tmux sessions appear as the top level, tmux windows as the middle level, and panes as the selectable items. The explorer offers `New Session` (a detached session) for tmux targets; windows and splits are arranged from the terminal as usual, although the create API still supports `tab` and `split` kinds for tmux.
+The Session Explorer keeps the same three-level layout with tmux names: tmux sessions appear as the top level, tmux windows as the middle level, and panes as the selectable items. The explorer offers `New Session` (a detached session started in the target user's home directory) for tmux targets; windows and splits are arranged from the terminal as usual, although the create API still supports `tab` and `split` kinds for tmux.
 
 Differences from kitty targets:
 
@@ -127,7 +127,8 @@ Differences from kitty targets:
 - Mobile pane conversations keep the input composer visible at the bottom. Fit mode wraps terminal text to the phone width; Wide mode preserves terminal columns and allows horizontal scrolling.
 - Switching panes clears the previous pane text immediately, identifies the pane being loaded, cancels the previous screen request, and ignores any late response from the old pane.
 - On mobile, terminal URL clicks open the Browser as a full-screen overlay. Use `‹ KT Panel` or the system Back action to return to the pane, or the floating Browser tab to reopen the last preview.
-- The `Keys` menu above the composer sends lower-frequency terminal keys: `Shift+←` (answer Codex questions), `Alt+↑`, `Shift+Tab`, `Esc`, `Tab`, `Ctrl+C`, `Ctrl+D`, `Backspace`, `Delete`, `Ctrl+A/E/K/L/U/W`, arrows, `Home`, and `End`.
+- The `Keys` menu above the composer is grouped by the program that reads the key, each button with a one-line hint. `Claude Code`: `Shift+Tab` (cycle permission mode), `Esc Esc` (rewind menu), `Ctrl+B` (background the running task; one press suffices because tmux `send-keys` bypasses the prefix), `Ctrl+X Ctrl+S` (send queued messages now), `Ctrl+T`, `Ctrl+O`, `Ctrl+R`, `Alt+P`, `Alt+O`, `Ctrl+X Ctrl+K`. `Codex`: `Shift+Tab` (cycle collaboration mode), `Esc Esc` (edit previous message), `Tab` (queue the draft), `Shift+←/→` (questions and queued messages), `Ctrl+]`, `Shift+↑/↓` (reasoning effort), `Ctrl+T`, `Ctrl+R`, `Alt+←/→` (switch agent), `y`/`a`/`n` for approvals. `Terminal`: `Esc`, `Tab`, `Ctrl+C`, `Ctrl+D`, `Ctrl+D ×2`, `Ctrl+Z`, `Ctrl+L`; then line editing (`Backspace`, `Delete`, `Ctrl+A/E/K/U/W/Y`) and navigation (arrows, `Home`, `End`, `PgUp`, `PgDn`).
+- Chords such as `Ctrl+X Ctrl+S` go out as one `/api/send-key` request with a `keys` array; a repeated `Esc` is written as separate presses 50 ms apart so the program does not read the pair as one Alt-prefixed key.
 - Composer text is sent verbatim with bracketed paste when the pane program supports it, so backslashes survive and multi-line drafts arrive as one paste before the final `Enter`.
 - After scrolling into history, `Latest output ↓` returns to the live end. The last selected pane is restored after a page reload.
 

@@ -1596,8 +1596,18 @@ function renderSpecialKeyMenu() {
       button.type = "button";
       button.role = "menuitem";
       button.dataset.specialKeyId = item.id;
-      button.textContent = item.label;
-      button.title = item.key;
+      const keyLabel = document.createElement("span");
+      keyLabel.className = "special-key-label";
+      keyLabel.textContent = item.label;
+      button.appendChild(keyLabel);
+      if (item.hint) {
+        const hint = document.createElement("small");
+        hint.className = "special-key-hint";
+        hint.textContent = item.hint;
+        button.appendChild(hint);
+      }
+      const sent = item.keys ? item.keys.join(" ") : `${item.key}${item.repeat > 1 ? ` ×${item.repeat}` : ""}`;
+      button.title = item.hint ? `${item.hint} (${sent})` : sent;
       grid.appendChild(button);
     });
 
@@ -3935,12 +3945,14 @@ async function sendComposerKey(key, repeat = 1) {
   return runComposerAction(() => sendKey(key, repeat));
 }
 
+// `key` is one key name, or an array for a chord such as ["ctrl+x", "ctrl+s"].
 async function sendKey(key, repeat = 1) {
   if (!state.selectedTargetId || !hasSelectedWindow()) {
     setStatus("Select a pane first.", "warning");
     return;
   }
 
+  const keys = Array.isArray(key) ? key : null;
   const pane = captureSelectedPane();
   scheduleAutoFit();
   await apiFetch("/api/send-key", {
@@ -3950,12 +3962,14 @@ async function sendKey(key, repeat = 1) {
       targetId: pane.targetId,
       socket: pane.socket,
       windowId: pane.windowId,
-      key,
+      key: keys ? keys[0] : key,
+      keys: keys || undefined,
       repeat
     })
   });
 
-  setStatus(`Sent key ${key}${repeat > 1 ? ` ×${repeat}` : ""} to pane #${pane.windowId}.`, "success");
+  const sent = keys ? keys.join(" ") : `${key}${repeat > 1 ? ` ×${repeat}` : ""}`;
+  setStatus(`Sent key ${sent} to pane #${pane.windowId}.`, "success");
   noteScreenActivity();
   if (isPaneStillSelected(pane)) {
     await refreshScreen({ scrollToBottom: true });
@@ -4799,7 +4813,7 @@ function attachEvents() {
 
     try {
       closeSpecialKeyMenu();
-      await sendComposerKey(item.key, item.repeat || 1);
+      await sendComposerKey(item.keys || item.key, item.repeat || 1);
     } catch (error) {
       setStatus(error.message, "danger");
     }

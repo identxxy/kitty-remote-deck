@@ -1167,13 +1167,18 @@ async function handleApi(request, response, requestUrl) {
       const target = await resolveTargetFromRequest(body);
       const windowId = parseWindowId(body.windowId);
 
+      // `keys` sends a chord (Ctrl+X Ctrl+S) in one round trip; `repeat` repeats one key.
+      const keys = Array.isArray(body.keys)
+        ? body.keys.slice(0, 8).map((item) => String(item || "").trim()).filter(Boolean)
+        : [];
       const data = await runRemoteKittyAction(
         target,
         "send_key",
         {
           socket: body.socket || "",
           windowId,
-          key: String(body.key || "enter"),
+          key: String(body.key || keys[0] || "enter"),
+          keys,
           repeat: Math.max(1, Math.min(Number(body.repeat) || 1, 5))
         },
         25000

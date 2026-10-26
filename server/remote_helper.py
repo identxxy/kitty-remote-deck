@@ -8,6 +8,7 @@ import socket as socket_module
 import stat
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from urllib.error import HTTPError
 from urllib.parse import unquote, urlparse
@@ -450,13 +451,32 @@ def key_repeat_count():
     return max(1, min(int(PAYLOAD.get("repeat") or 1), 5))
 
 
+def key_sequence():
+    # `keys` is a chord such as Ctrl-X Ctrl-S; otherwise one key repeated.
+    keys = PAYLOAD.get("keys")
+    if isinstance(keys, list) and keys:
+        return [str(key) for key in keys[:8]]
+    return [PAYLOAD.get("key") or "enter"] * key_repeat_count()
+
+
+def send_key_sequence(send, names):
+    # A doubled Escape in one write can be read as one Alt-prefixed key, so
+    # sequences containing Escape go out one key at a time like real presses.
+    if len(names) > 1 and any(name in ("Escape", "escape", "esc") for name in names):
+        for index, name in enumerate(names):
+            if index:
+                time.sleep(0.05)
+            send([name])
+    else:
+        send(names)
+
+
 def action_send_key():
     window_id = int(PAYLOAD["windowId"])
     socket = resolve_socket(PAYLOAD.get("socket") or "")
-    key = PAYLOAD.get("key") or "enter"
-    repeat = key_repeat_count()
-    run_kitty(["send-key", "--match", f"id:{window_id}", *([key] * repeat)], socket=socket)
-    return {"socket": socket, "windowId": window_id, "key": key, "repeat": repeat}
+    keys = key_sequence()
+    send_key_sequence(lambda names: run_kitty(["send-key", "--match", f"id:{window_id}", *names], socket=socket), keys)
+    return {"socket": socket, "windowId": window_id, "key": keys[0], "keys": keys, "repeat": len(keys)}
 
 
 def action_focus_window():
@@ -504,7 +524,8 @@ def action_create_panel():
     socket = resolve_socket(PAYLOAD.get("socket") or "")
 
     if kind == "window":
-        window_id = run_launch(["launch", "--type", "os-window"], socket)
+        # A new OS window starts at home rather than in kitty's own cwd.
+        window_id = run_launch(["launch", "--type", "os-window", "--cwd", os.path.expanduser("~")], socket)
         return {"socket": socket, "kind": kind, "windowId": window_id}
 
     source_window_id = optional_positive_int("sourceWindowId")
@@ -959,10 +980,10 @@ def tmux_key_name(key):
 def tmux_action_send_key():
     window_id = int(PAYLOAD["windowId"])
     socket = resolve_socket(PAYLOAD.get("socket") or "")
-    key = PAYLOAD.get("key") or "enter"
-    repeat = key_repeat_count()
-    run_tmux(["send-keys", "-t", tmux_pane_target(window_id), *([tmux_key_name(key)] * repeat)], socket)
-    return {"socket": socket, "windowId": window_id, "key": key, "repeat": repeat}
+    keys = key_sequence()
+    target = tmux_pane_target(window_id)
+    send_key_sequence(lambda names: run_tmux(["send-keys", "-t", target, *names], socket), [tmux_key_name(key) for key in keys])
+    return {"socket": socket, "windowId": window_id, "key": keys[0], "keys": keys, "repeat": len(keys)}
 
 
 def tmux_action_focus_window():
@@ -979,7 +1000,11 @@ def tmux_action_create_panel():
     socket = resolve_socket(PAYLOAD.get("socket") or "")
 
     if kind == "window":
-        pane_id = run_tmux(["new-session", "-d", "-P", "-F", "#{pane_id}"], socket).strip()
+        # Without -c the session would inherit this helper's cwd (the deck's own
+        # directory locally, or wherever ssh landed); a fresh session starts at home.
+        pane_id = run_tmux(
+            ["new-session", "-d", "-c", os.path.expanduser("~"), "-P", "-F", "#{pane_id}"], socket
+        ).strip()
         return {"socket": socket, "kind": kind, "windowId": tmux_numeric_id(pane_id)}
 
     source_window_id = optional_positive_int("sourceWindowId")
