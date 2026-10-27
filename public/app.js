@@ -42,6 +42,8 @@ const MOBILE_UTILS = window.KRDMobileUtils;
 const PREVIEW_HISTORY = window.KRDPreviewHistory;
 const COMPOSER_UTILS = window.KRDComposerUtils;
 const PANE_TREE = window.KRDPaneTree;
+const RESIZE_UTILS = window.KRDResizeUtils;
+const LAYOUT_UTILS = window.KRDLayoutUtils;
 const TERMINAL_LINES = window.KRDTerminalLines;
 const PANE_LAYOUT_STORAGE_KEY = "kitty-remote-deck.paneLayout.v1";
 const SECONDARY_VIEW_POLL_MS = 2000;
@@ -692,19 +694,7 @@ function initializeClientDebug() {
 }
 
 function getSidebarWidthBounds() {
-  const viewportWidth = window.innerWidth || 1200;
-
-  if (viewportWidth <= 720) {
-    const max = Math.max(160, Math.floor(viewportWidth * 0.42));
-    return { min: 160, max };
-  }
-
-  if (viewportWidth <= 980) {
-    const max = Math.max(SIDEBAR_WIDTH_RANGE.min, Math.floor(viewportWidth * 0.36));
-    return { min: SIDEBAR_WIDTH_RANGE.min, max };
-  }
-
-  return SIDEBAR_WIDTH_RANGE;
+  return RESIZE_UTILS.sidebarWidthBounds(window.innerWidth || 1200, SIDEBAR_WIDTH_RANGE);
 }
 
 function getEffectiveSidebarWidth() {
@@ -719,20 +709,12 @@ function getActivityBarWidth() {
 
 function getBrowserWidthBounds() {
   const viewportWidth = window.innerWidth || 1200;
-  const activityWidth = getActivityBarWidth();
-  const sidebarWidth = viewportWidth <= 720 || !state.sidebarVisible ? 0 : getEffectiveSidebarWidth();
-  const minEditorWidth = viewportWidth <= 720 ? 96 : 180;
-  const maxByLayout = viewportWidth - activityWidth - sidebarWidth - minEditorWidth;
-
-  if (viewportWidth <= 720) {
-    const min = Math.min(260, Math.max(220, maxByLayout));
-    return { min, max: Math.max(min, maxByLayout) };
-  }
-
-  const min = Math.min(BROWSER_WIDTH_RANGE.min, Math.max(260, maxByLayout));
-  const maxByFraction = Math.round(viewportWidth * BROWSER_WIDTH_RANGE.maxFraction);
-  const max = Math.max(min, Math.min(maxByFraction, maxByLayout));
-  return { min, max };
+  return RESIZE_UTILS.browserWidthBounds({
+    viewportWidth,
+    activityWidth: getActivityBarWidth(),
+    sidebarWidth: viewportWidth <= 720 || !state.sidebarVisible ? 0 : getEffectiveSidebarWidth(),
+    range: BROWSER_WIDTH_RANGE
+  });
 }
 
 function getEffectiveBrowserWidth() {
@@ -2551,24 +2533,7 @@ const LAYOUT_AUTOSAVE_DELAY_MS = 600;
 let layoutAutosaveTimer = 0;
 let layoutApplying = false;
 
-function normalizeBrowserState(raw) {
-  if (!raw || typeof raw.url !== "string" || !raw.url) {
-    return null;
-  }
-  return { url: raw.url, targetId: typeof raw.targetId === "string" ? raw.targetId : "" };
-}
-
-// A layout as the client stores and sends it: tree, active view, pinned Browser.
-function decodeLayoutPayload(raw) {
-  if (!raw) {
-    return null;
-  }
-  const decoded = PANE_TREE.decodePersistedPaneLayout({ paneVersion: 1, paneRoot: raw.paneRoot, activePaneId: raw.activePaneId });
-  if (!decoded.paneRoot) {
-    return null;
-  }
-  return { paneRoot: decoded.paneRoot, activePaneId: decoded.activePaneId, browser: normalizeBrowserState(raw.browser) };
-}
+const { normalizeBrowserState, decodeLayoutPayload } = LAYOUT_UTILS;
 
 // The Browser belongs to a layout only while it is pinned. Phones never pin,
 // so from a phone the layout keeps whatever Browser it already had.
