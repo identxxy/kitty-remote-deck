@@ -11,7 +11,8 @@ import sys
 import time
 from datetime import datetime, timezone
 from urllib.error import HTTPError
-from urllib.parse import unquote, urlparse
+from html import escape as html_escape
+from urllib.parse import quote as urllib_quote, unquote, urlparse
 from urllib.request import Request, url2pathname, urlopen
 
 
@@ -254,9 +255,73 @@ def fetch_file_url(url, parsed):
     if not file_path:
         raise RuntimeError("file:// URL is missing a path.")
 
+    if os.path.isdir(file_path):
+        html = render_directory_listing(file_path)
+        return make_fetch_response(url, url, html.encode("utf-8"), "text/html; charset=utf-8", False)
+
     raw, truncated = read_limited_bytes(file_path)
     content_type = mimetypes.guess_type(file_path)[0] or "text/plain"
     return make_fetch_response(url, url, raw, content_type, truncated)
+
+
+def format_file_size(size):
+    units = ["B", "KB", "MB", "GB", "TB"]
+    value = float(size)
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{size} B"
+
+
+def render_directory_listing(dir_path):
+    # A plain page the Browser can show for a directory: folders first, then
+    # files, each linked by its absolute file:// URL so the proxy rewrite
+    # handles them like any other reference.
+    directory = os.path.abspath(dir_path)
+    entries = []
+    try:
+        names = sorted(os.listdir(directory), key=lambda name: name.lower())
+    except OSError as error:
+        raise RuntimeError(f"Cannot list {directory}: {error}")
+    for name in names:
+        full = os.path.join(directory, name)
+        try:
+            stat = os.stat(full)
+        except OSError:
+            continue
+        is_dir = os.path.isdir(full)
+        entries.append((not is_dir, name.lower(), name, full, is_dir, stat))
+    entries.sort()
+
+    def file_url(path_value):
+        return "file://" + urllib_quote(path_value)
+
+    rows = []
+    parent = os.path.dirname(directory)
+    if parent and parent != directory:
+        rows.append(f'<tr><td><a class="dir" href="{html_escape(file_url(parent))}/">..</a></td><td></td><td></td></tr>')
+    for _, _, name, full, is_dir, stat in entries:
+        href = file_url(full) + ("/" if is_dir else "")
+        label = html_escape(name + ("/" if is_dir else ""))
+        size = "" if is_dir else format_file_size(stat.st_size)
+        modified = time.strftime("%Y-%m-%d %H:%M", time.localtime(stat.st_mtime))
+        css = "dir" if is_dir else "file"
+        rows.append(f'<tr><td><a class="{css}" href="{html_escape(href)}">{label}</a></td><td>{size}</td><td>{modified}</td></tr>')
+    title = html_escape(directory)
+    return (
+        "<!doctype html><html><head><meta charset=\"utf-8\">"
+        f"<title>{title}</title>"
+        "<style>"
+        "body{margin:0;padding:18px 22px;font:14px/1.5 system-ui,sans-serif;background:#111315;color:#d4d4d4}"
+        "h1{margin:0 0 14px;font-size:15px;font-weight:600;color:#f2f2f2;word-break:break-all}"
+        "table{border-collapse:collapse;width:100%}td{padding:4px 10px 4px 0;border-bottom:1px solid #262a2e;white-space:nowrap}"
+        "td:first-child{width:100%;white-space:normal;word-break:break-all}td:nth-child(2){text-align:right;color:#8d96a0}td:nth-child(3){color:#8d96a0}"
+        "a{color:#4db1ff;text-decoration:none}a.dir{color:#dcdcaa;font-weight:600}a:hover{text-decoration:underline}"
+        "@media (prefers-color-scheme: light){body{background:#fff;color:#252526}h1{color:#111}td{border-color:#e4e4e4}a{color:#006ab1}a.dir{color:#7a5a00}}"
+        "</style></head><body>"
+        f"<h1>{title}</h1><table>{''.join(rows)}</table></body></html>"
+    )
 
 
 def fetch_file_resource(url, parsed, range_header):

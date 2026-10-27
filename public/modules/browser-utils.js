@@ -43,15 +43,19 @@
     return html;
   }
 
+  // Mirrors server/url_proxy.js createProxyUrl: the path form when a token is
+  // in hand, so the page's relative references resolve under the proxy path.
   function createPreviewResourceUrl(url, targetId, accessToken = "") {
+    if (accessToken) {
+      const parsed = new URL(url);
+      const scheme = parsed.protocol.replace(/:$/, "");
+      return `/p/${encodeURIComponent(targetId)}/${accessToken}/${scheme}/${parsed.host || "-"}${parsed.pathname}${parsed.search}`;
+    }
+
     const params = new URLSearchParams({
       targetId,
       url
     });
-
-    if (accessToken) {
-      params.set("access", accessToken);
-    }
 
     return `/api/url-resource?${params.toString()}`;
   }

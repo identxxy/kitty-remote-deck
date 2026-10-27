@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This project is a local web app for browsing and controlling GUI `kitty` sessions, or headless `tmux` servers, on the same machine or over SSH.
+This project is Terminal Dock, a local web app that drives GUI `kitty` sessions (visible on the host's display) or headless `tmux` servers from a browser, on the same machine or over SSH.
 
 ## Project root
 

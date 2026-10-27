@@ -79,6 +79,60 @@
 /* ---- Additional palettes ------------------------------------------------ */
 /* Each theme overrides the same variable set; the theme dot follows --accent. */
 
+/* Cyberpunk 2077: night city neon (cyan + pink on near-black) ... */
+:root[data-theme="cyberpunk-dark"] {
+  --app-bg: #0a0b14;
+  --chrome-bg: #10121f;
+  --chrome-bg-strong: #161a2b;
+  --sidebar-bg: #0c0e19;
+  --editor-bg: #07080f;
+  --panel-bg: #0f1120;
+  --field-bg: #151a2c;
+  --hover-bg: #1c2238;
+  --active-bg: #1f2a4d;
+  --line: #262c47;
+  --line-strong: #3b4470;
+  --text: #c8d3f5;
+  --text-strong: #eef3ff;
+  --muted: #7f8bb3;
+  --accent: #00f0ff;
+  --accent-strong: #ff2a6d;
+  --amber: #fcee0a;
+  --danger: #ff2a6d;
+  --success: #05ffa1;
+  --warning: #fcee0a;
+  --status-bg: #ff2a6d;
+  --status-text: #0a0b14;
+  --shadow: 0 12px 32px rgba(0, 240, 255, 0.14);
+}
+
+/* ... and the daytime poster look (Arasaka yellow, acid green). */
+:root[data-theme="cyberpunk-light"] {
+  --app-bg: #f3eec0;
+  --chrome-bg: #faf5cc;
+  --chrome-bg-strong: #fffbdc;
+  --sidebar-bg: #f6f1c4;
+  --editor-bg: #fffdf0;
+  --panel-bg: #faf6d2;
+  --field-bg: #fffde8;
+  --hover-bg: #efe88a;
+  --active-bg: #e4f28a;
+  --line: #d6cf78;
+  --line-strong: #a39d3c;
+  --text: #1f2414;
+  --text-strong: #0b0d05;
+  --muted: #6b6e3c;
+  --accent: #7fb800;
+  --accent-strong: #3f8f00;
+  --amber: #c98f00;
+  --danger: #d5004a;
+  --success: #3f8f00;
+  --warning: #a37c00;
+  --status-bg: #fcee0a;
+  --status-text: #111111;
+  --shadow: 0 10px 24px rgba(70, 70, 0, 0.16);
+}
+
 :root[data-theme="nord"] {
   --app-bg: #2e3440;
   --chrome-bg: #3b4252;
@@ -331,13 +385,8 @@ button {
 .brand-mark {
   width: 28px;
   height: 28px;
-  display: inline-grid;
-  place-items: center;
-  border-radius: 4px;
-  background: var(--active-bg);
-  color: var(--accent-strong);
-  font-size: 0.72rem;
-  letter-spacing: 0;
+  display: block;
+  border-radius: 7px;
 }
 
 .brand-block .eyebrow,
@@ -375,7 +424,7 @@ button {
 
 .segmented-control,
 .theme-control,
-.resize-lock {
+.layout-lock {
   min-height: 30px;
   display: inline-flex;
   align-items: center;
@@ -471,24 +520,44 @@ button {
   background: #007acc;
 }
 
-.resize-lock {
-  gap: 7px;
+.layout-lock {
+  gap: 6px;
   padding: 0 10px;
   color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
   user-select: none;
 }
 
-.resize-lock input {
-  width: 13px;
-  height: 13px;
-  margin: 0;
-  accent-color: var(--accent);
+.layout-lock:hover {
+  color: var(--text-strong);
+  background: var(--hover-bg);
 }
 
-.resize-lock:has(input:checked) {
+.layout-lock svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.layout-lock .lock-open,
+.layout-lock[aria-pressed="true"] .lock-closed {
+  display: none;
+}
+
+.layout-lock[aria-pressed="true"] {
   color: var(--text-strong);
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent), var(--field-bg) 82%);
+}
+
+.layout-lock[aria-pressed="true"] .lock-open {
+  display: block;
 }
 
 .workbench {
@@ -501,12 +570,7 @@ button {
   overflow: hidden;
 }
 
-.app-shell.resize-enabled .workbench {
-  grid-template-columns: var(--activity-width) var(--sidebar-width) 6px minmax(0, 1fr);
-}
-
-.app-shell.sidebar-hidden .workbench,
-.app-shell.sidebar-hidden.resize-enabled .workbench {
+.app-shell.sidebar-hidden .workbench {
   grid-template-columns: var(--activity-width) 0 0 minmax(0, 1fr);
 }
 
@@ -514,21 +578,15 @@ button {
   grid-template-columns: var(--activity-width) var(--sidebar-width) 0 minmax(0, 1fr) var(--browser-width);
 }
 
-.app-shell.browser-pinned.preview-open.resize-enabled .workbench {
-  grid-template-columns: var(--activity-width) var(--sidebar-width) 6px minmax(0, 1fr) var(--browser-width);
-}
-
-.app-shell.browser-pinned.preview-open.sidebar-hidden .workbench,
-.app-shell.browser-pinned.preview-open.sidebar-hidden.resize-enabled .workbench {
+.app-shell.browser-pinned.preview-open.sidebar-hidden .workbench {
   grid-template-columns: var(--activity-width) 0 0 minmax(0, 1fr) var(--browser-width);
 }
 
 .activity-bar {
   grid-column: 1;
   min-height: 0;
-  display: grid;
-  grid-auto-rows: min-content;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
   gap: 4px;
   padding: 8px 4px;
   border-right: 1px solid var(--line);
@@ -536,6 +594,7 @@ button {
 }
 
 .activity-item {
+  flex: 0 0 auto;
   min-width: 0;
   min-height: 48px;
   border: 0;
@@ -546,6 +605,11 @@ button {
   padding: 6px 2px;
   background: transparent;
   color: var(--muted);
+}
+
+/* The Browser tab sits at the bottom of the bar, like a secondary view. */
+.activity-item.activity-bottom {
+  margin-top: auto;
 }
 
 .activity-icon {
@@ -608,8 +672,18 @@ button {
   grid-template-rows: auto auto minmax(84px, 0.28fr) minmax(0, 1fr) auto;
 }
 
-#profilesSidebarView {
+#layoutsSidebarView,
+#browserSidebarView {
   grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.report-row .layout-row-main small {
+  direction: rtl;
+  text-align: left;
+}
+
+.report-row .layout-row-actions .icon-button.active {
+  color: var(--amber);
 }
 
 .head-text-button {
@@ -624,14 +698,14 @@ button {
   display: none;
 }
 
-.profile-save-form {
+.layout-save-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 6px;
   align-items: center;
 }
 
-.profile-save-form input {
+.layout-save-form input {
   width: 100%;
   min-height: 34px;
   padding: 6px 10px;
@@ -642,7 +716,7 @@ button {
   font: inherit;
 }
 
-.profile-list {
+.layout-list {
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -650,7 +724,7 @@ button {
   overflow: auto;
 }
 
-.profile-row {
+.layout-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 4px;
@@ -660,16 +734,16 @@ button {
   background: color-mix(in srgb, var(--field-bg), transparent 30%);
 }
 
-.profile-row.active {
+.layout-row.active {
   border-color: var(--accent);
   background: var(--active-bg);
 }
 
-.profile-row.reserved {
+.layout-row.reserved {
   border-style: dashed;
 }
 
-.profile-badge {
+.layout-badge {
   display: inline-block;
   margin-left: 6px;
   padding: 1px 6px;
@@ -683,7 +757,7 @@ button {
   letter-spacing: 0.04em;
 }
 
-.profile-row-main {
+.layout-row-main {
   min-width: 0;
   display: grid;
   gap: 3px;
@@ -697,11 +771,11 @@ button {
   cursor: pointer;
 }
 
-.profile-row-main:hover {
+.layout-row-main:hover {
   background: var(--hover-bg);
 }
 
-.profile-row-main strong {
+.layout-row-main strong {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -709,20 +783,20 @@ button {
   font-weight: 650;
 }
 
-.profile-row-main small {
+.layout-row-main small {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   color: var(--muted);
 }
 
-.profile-row-actions {
+.layout-row-actions {
   display: inline-flex;
   gap: 2px;
   padding-right: 4px;
 }
 
-.profile-row-actions .icon-button {
+.layout-row-actions .icon-button {
   width: 28px;
   height: 28px;
 }
@@ -792,15 +866,25 @@ button {
   display: block;
 }
 
+/* Both handles sit on a zero-width grid track and overflow it, so showing
+   them never moves the editor (and never resizes the tmux pane). */
 .sidebar-resize-handle {
   grid-column: 3;
+  z-index: 5;
+  width: 6px;
+  margin-left: -3px;
   cursor: col-resize;
+  touch-action: none;
 }
 
 .panel-resize-handle {
   grid-column: 1;
   grid-row: 2;
+  z-index: 7;
+  height: 6px;
+  margin-top: -3px;
   cursor: row-resize;
+  touch-action: none;
 }
 
 .resize-handle::after {
@@ -808,6 +892,17 @@ button {
   position: absolute;
   inset: 0;
   background: transparent;
+}
+
+/* Unlocked: a faint line marks where to drag; the Browser edge stays quiet. */
+.sidebar-resize-handle::after {
+  inset: 0 2px;
+  background: color-mix(in srgb, var(--accent), transparent 65%);
+}
+
+.panel-resize-handle::after {
+  inset: 2px 0;
+  background: color-mix(in srgb, var(--accent), transparent 65%);
 }
 
 .resize-handle:hover::after,
@@ -857,10 +952,6 @@ button {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent), var(--active-bg) 74%);
   color: var(--text-strong);
-}
-
-.app-shell.resize-enabled .editor-region {
-  grid-template-rows: minmax(0, 1fr) 6px auto;
 }
 
 .editor-pane {
@@ -921,6 +1012,16 @@ button {
   min-height: 30px;
   padding: 0;
   font-size: 1.1rem;
+  line-height: 1;
+}
+
+.editor-split-button {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  font-size: 1rem;
   line-height: 1;
 }
 
@@ -991,6 +1092,12 @@ button {
   border: 0;
   overscroll-behavior: contain;
   touch-action: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Screen mode forwards vertical swipes to the pane; the browser must not pan. */
+.screen-output[data-extent="screen"] {
+  touch-action: pan-x pinch-zoom;
 }
 
 .latest-output-button {
@@ -1324,7 +1431,7 @@ button {
   bottom: 0;
   width: var(--browser-width);
   max-width: calc(100vw - var(--activity-width));
-  min-width: 360px;
+  min-width: 320px;
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr);
   border-left: 1px solid var(--line);
@@ -1352,6 +1459,7 @@ button {
 }
 
 .browser-resize-handle {
+  display: block;
   position: absolute;
   z-index: 4;
   top: 0;
@@ -1362,35 +1470,90 @@ button {
   touch-action: none;
 }
 
+/* The iframe would swallow pointer moves mid-drag. */
+.app-shell.resizing .preview-frame {
+  pointer-events: none;
+}
+
 .browser-resize-handle::after {
   inset: 0;
 }
 
-.preview-reopen-button {
+/* Right-edge tab that brings a hidden Browser back. Collapsed it shows the
+   globe; hover or focus slides the page title out. On touch it also opens on
+   a leftward swipe, following the finger first. */
+.browser-handle {
   position: absolute;
   z-index: 26;
   top: 50%;
   right: 0;
-  min-width: 28px;
-  min-height: 82px;
-  padding: 8px 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 34px;
+  height: 60px;
+  padding: 0 8px 0 9px;
   border: 1px solid var(--line);
   border-right: 0;
-  border-radius: 6px 0 0 6px;
-  background: var(--chrome-bg-strong);
+  border-left: 2px solid var(--accent);
+  border-radius: 10px 0 0 10px;
+  background: color-mix(in srgb, var(--chrome-bg-strong) 88%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   color: var(--text);
-  box-shadow: -8px 0 20px rgba(0, 0, 0, 0.24);
-  font-size: 0.74rem;
-  font-weight: 650;
-  text-orientation: mixed;
+  box-shadow: -6px 0 18px rgba(0, 0, 0, 0.26);
+  overflow: hidden;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: none;
   transform: translateY(-50%);
-  writing-mode: vertical-rl;
+  transition: max-width 180ms ease, background 120ms ease, color 120ms ease, transform 160ms ease;
 }
 
-.preview-reopen-button:hover {
-  border-color: var(--accent);
-  background: var(--active-bg);
+.browser-handle[hidden] {
+  display: none;
+}
+
+.browser-handle-icon {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.browser-handle-label {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.78rem;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 120ms ease 60ms;
+}
+
+.browser-handle:hover,
+.browser-handle:focus-visible {
+  max-width: 280px;
+  background: var(--chrome-bg-strong);
   color: var(--text-strong);
+}
+
+.browser-handle:hover .browser-handle-label,
+.browser-handle:focus-visible .browser-handle-label {
+  opacity: 1;
+}
+
+.browser-handle:active {
+  background: var(--active-bg);
+}
+
+.browser-handle.dragging {
+  transition: none;
 }
 
 .preview-head {
@@ -2214,13 +2377,9 @@ textarea::-webkit-scrollbar-thumb:hover {
   }
 
   .workbench,
-  .app-shell.resize-enabled .workbench,
   .app-shell.sidebar-hidden .workbench,
-  .app-shell.sidebar-hidden.resize-enabled .workbench,
   .app-shell.browser-pinned.preview-open .workbench,
-  .app-shell.browser-pinned.preview-open.resize-enabled .workbench,
-  .app-shell.browser-pinned.preview-open.sidebar-hidden .workbench,
-  .app-shell.browser-pinned.preview-open.sidebar-hidden.resize-enabled .workbench {
+  .app-shell.browser-pinned.preview-open.sidebar-hidden .workbench {
     grid-template-columns: minmax(0, 1fr);
     height: 100svh;
     height: 100dvh;
@@ -2248,8 +2407,7 @@ textarea::-webkit-scrollbar-thumb:hover {
     touch-action: auto;
   }
 
-  .editor-region,
-  .app-shell.resize-enabled .editor-region {
+  .editor-region {
     position: fixed;
     z-index: 12;
     inset: 0;
@@ -2261,14 +2419,16 @@ textarea::-webkit-scrollbar-thumb:hover {
 
   .app-shell.mobile-screen-connect .primary-sidebar,
   .app-shell.mobile-screen-sessions .primary-sidebar,
-  .app-shell.mobile-screen-profiles .primary-sidebar {
+  .app-shell.mobile-screen-reports .primary-sidebar,
+  .app-shell.mobile-screen-layouts .primary-sidebar {
     display: block;
     pointer-events: auto !important;
   }
 
   .app-shell.mobile-screen-connect .primary-sidebar *,
   .app-shell.mobile-screen-sessions .primary-sidebar *,
-  .app-shell.mobile-screen-profiles .primary-sidebar * {
+  .app-shell.mobile-screen-reports .primary-sidebar *,
+  .app-shell.mobile-screen-layouts .primary-sidebar * {
     pointer-events: auto;
   }
 
@@ -2276,7 +2436,8 @@ textarea::-webkit-scrollbar-thumb:hover {
   .app-shell.mobile-screen-browser .primary-sidebar,
   .app-shell.mobile-screen-connect .editor-region,
   .app-shell.mobile-screen-sessions .editor-region,
-  .app-shell.mobile-screen-profiles .editor-region {
+  .app-shell.mobile-screen-reports .editor-region,
+  .app-shell.mobile-screen-layouts .editor-region {
     display: none;
   }
 
@@ -2308,7 +2469,8 @@ textarea::-webkit-scrollbar-thumb:hover {
     display: inline-flex;
   }
 
-  #profilesSidebarView {
+  #layoutsSidebarView,
+  #browserSidebarView {
     grid-template-rows: auto auto auto minmax(0, 1fr);
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
@@ -2427,7 +2589,8 @@ textarea::-webkit-scrollbar-thumb:hover {
   }
 
   .editor-tools > .toggle,
-  .compact-editor-button {
+  .compact-editor-button,
+  .editor-split-button {
     display: none;
   }
 
@@ -2516,9 +2679,31 @@ textarea::-webkit-scrollbar-thumb:hover {
     box-shadow: none;
   }
 
+  .browser-handle {
+    height: 56px;
+    max-width: 32px;
+    padding: 0 6px 0 8px;
+  }
+
+  .browser-handle:hover {
+    max-width: 32px;
+  }
+
+  .browser-handle:hover .browser-handle-label {
+    opacity: 0;
+  }
+
+  .app-shell.mobile-screen-connect .browser-handle,
+  .app-shell.mobile-screen-sessions .browser-handle,
+  .app-shell.mobile-screen-reports .browser-handle,
+  .app-shell.mobile-screen-layouts .browser-handle {
+    display: none;
+  }
+
   .app-shell.mobile-screen-connect .preview-drawer,
   .app-shell.mobile-screen-sessions .preview-drawer,
-  .app-shell.mobile-screen-profiles .preview-drawer {
+  .app-shell.mobile-screen-reports .preview-drawer,
+  .app-shell.mobile-screen-layouts .preview-drawer {
     display: none;
     pointer-events: none;
   }
@@ -2562,19 +2747,6 @@ textarea::-webkit-scrollbar-thumb:hover {
   }
 
   .preview-head .section-kicker {
-    display: none;
-  }
-
-  .preview-reopen-button {
-    top: 50%;
-    right: 0;
-    bottom: auto;
-    transform: translateY(-50%);
-  }
-
-  .app-shell.mobile-screen-connect .preview-reopen-button,
-  .app-shell.mobile-screen-sessions .preview-reopen-button,
-  .app-shell.mobile-screen-profiles .preview-reopen-button {
     display: none;
   }
 
@@ -2790,11 +2962,12 @@ textarea::-webkit-scrollbar-thumb:hover {
   cursor: default;
 }
 
-/* The active view (the one the sidebar and composer act on) is raised: it
-   lifts a few pixels with a shadow and an accent ring while the others sit
-   back slightly dimmed. Transforms only, so nothing is laid out again and
-   the text never shifts inside a view; a secondary view's selected pane keeps
-   the neutral outline so the accent never points at a non-input view. */
+/* The active view (the one the sidebar and composer act on) carries a shadow
+   and an accent ring while the others sit back slightly dimmed. No transform
+   or rounded clip around the scrolling text: on iOS a scroller inside a
+   transformed, rounded-clipped box loses smooth compositor scrolling. A
+   secondary view's selected pane keeps the neutral outline so the accent
+   never points at a non-input view. */
 .pane-tree:not(.single) {
   padding: 4px 4px 2px;
 }
@@ -2803,16 +2976,7 @@ textarea::-webkit-scrollbar-thumb:hover {
   position: relative;
   border-radius: 8px;
   background: var(--editor-bg);
-  transform: translateY(0);
-  transition:
-    transform 240ms cubic-bezier(0.2, 0.7, 0.2, 1),
-    box-shadow 240ms ease;
-  will-change: transform;
-}
-
-.pane-tree:not(.single) .pane-slot > .pane-slot-body {
-  overflow: hidden;
-  border-radius: 0 0 8px 8px;
+  transition: box-shadow 240ms ease;
 }
 
 /* The raised view keeps the editor background; the views that are not the
@@ -2828,25 +2992,11 @@ textarea::-webkit-scrollbar-thumb:hover {
 
 .pane-tree:not(.single) .pane-slot.active {
   z-index: 1;
-  transform: translateY(-3px);
   box-shadow:
     0 0 0 1px var(--accent),
     0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent),
     0 14px 30px rgba(0, 0, 0, 0.42),
     0 3px 8px rgba(0, 0, 0, 0.3);
-  animation: pane-slot-lift 360ms cubic-bezier(0.2, 0.7, 0.2, 1);
-}
-
-@keyframes pane-slot-lift {
-  0% {
-    transform: translateY(0);
-  }
-  55% {
-    transform: translateY(-5px);
-  }
-  100% {
-    transform: translateY(-3px);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

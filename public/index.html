@@ -3,17 +3,23 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Kitty Remote Deck</title>
-    <link rel="stylesheet" href="/styles.css?v=0.2.12" />
+    <title>Terminal Dock</title>
+    <meta name="theme-color" content="#0a1020" />
+    <meta name="apple-mobile-web-app-title" content="Terminal Dock" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="stylesheet" href="/styles.css?v=0.2.2" />
   </head>
   <body>
     <div class="app-shell" id="appShell">
       <header class="topbar">
         <div class="brand-block">
-          <strong class="brand-mark">KRD</strong>
+          <img class="brand-mark" src="/icon.svg" alt="" width="28" height="28" />
           <div>
-            <p class="eyebrow">Kitty Remote Deck · v0.2.1</p>
-            <h1>Remote Kitty Workbench</h1>
+            <p class="eyebrow">Terminal Dock · v0.2.2</p>
+            <h1>Remote Terminal Workbench</h1>
           </div>
         </div>
 
@@ -36,19 +42,25 @@
                   <option value="tokyo">Tokyo Night</option>
                   <option value="gruvbox">Gruvbox</option>
                   <option value="rosepine">Rosé Pine</option>
+                  <option value="cyberpunk-dark">Cyberpunk 2077 Dark</option>
                 </optgroup>
                 <optgroup label="Light">
                   <option value="light">Light</option>
                   <option value="latte">Catppuccin Latte</option>
                   <option value="solarized">Solarized Light</option>
+                  <option value="cyberpunk-light">Cyberpunk 2077 Light</option>
                 </optgroup>
               </select>
             </label>
 
-            <label class="resize-lock" title="Allow layout resizing">
-              <input id="resizeToggle" type="checkbox" />
-              <span id="resizeLabel">Layout Locked</span>
-            </label>
+            <button class="layout-lock" id="resizeToggle" type="button" aria-pressed="false" title="Layout locked. Click to allow dragging the sidebar and bottom panel edges.">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3" y="11" width="18" height="11" rx="2"></rect>
+                <path class="lock-closed" d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                <path class="lock-open" d="M7 11V7a5 5 0 0 1 9.9-1"></path>
+              </svg>
+              <span id="resizeLabel">Locked</span>
+            </button>
           </div>
 
         </div>
@@ -79,14 +91,23 @@
             </svg>
             <span class="sr-only">Sessions</span>
           </button>
-          <button class="activity-item" id="showProfilesViewBtn" type="button" data-view="profiles" aria-label="Profiles view" title="Profiles">
+          <button class="activity-item" id="showLayoutsViewBtn" type="button" data-view="layouts" aria-label="Layouts view" title="Layouts">
             <svg class="activity-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
               <rect x="3" y="4" width="18" height="16" rx="2"></rect>
               <path d="M12 4v16"></path>
               <path d="M12 12h9"></path>
               <path d="M6 9h3"></path>
             </svg>
-            <span class="sr-only">Profiles</span>
+            <span class="sr-only">Layouts</span>
+          </button>
+          <button class="activity-item activity-bottom" id="showBrowserViewBtn" type="button" data-view="browser" aria-label="Browser view" title="Browser">
+            <svg class="activity-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <circle cx="12" cy="12" r="9"></circle>
+              <path d="M3 12h18"></path>
+              <path d="M12 3a13.5 13.5 0 0 1 0 18"></path>
+              <path d="M12 3a13.5 13.5 0 0 0 0 18"></path>
+            </svg>
+            <span class="sr-only">Browser</span>
           </button>
         </nav>
 
@@ -99,7 +120,8 @@
                 <h2>Session Explorer</h2>
               </div>
               <div class="sidebar-head-actions">
-                <button class="ghost-button head-text-button" id="saveProfileBtn" type="button" title="Save the current views and panes as a named profile">Save profile</button>
+                <button class="ghost-button head-text-button" id="saveLayoutBtn" type="button" title="Save the current views, panes and pinned Browser as a named layout">Save layout</button>
+                <button class="ghost-button head-text-button mobile-only-button" id="mobileBrowserListBtn" type="button" title="Reports and the embedded Browser">Browser</button>
                 <button class="icon-button" id="reloadSessionTreeBtn" type="button" aria-label="Refresh sessions">↻</button>
               </div>
             </div>
@@ -116,29 +138,54 @@
             <div class="session-tree scroll-panel" id="sessionTree"></div>
           </section>
 
-          <section class="sidebar-view" id="profilesSidebarView" hidden>
+          <section class="sidebar-view" id="layoutsSidebarView" hidden>
             <div class="sidebar-head">
-              <button class="mobile-back-button" id="mobileBackFromProfilesBtn" type="button">‹ Back</button>
+              <button class="mobile-back-button" id="mobileBackFromLayoutsBtn" type="button">‹ Back</button>
               <div>
-                <p class="section-kicker">Profiles</p>
+                <p class="section-kicker">Layouts</p>
                 <h2>Saved Layouts</h2>
               </div>
               <div class="sidebar-head-actions">
-                <button class="icon-button" id="reloadProfilesBtn" type="button" aria-label="Reload profiles">↻</button>
+                <button class="icon-button" id="reloadLayoutsBtn" type="button" aria-label="Reload layouts">↻</button>
               </div>
             </div>
 
-            <form class="profile-save-form" id="profileSaveForm">
+            <form class="layout-save-form" id="layoutSaveForm">
               <label class="composer-field">
-                <span class="sr-only">Profile name</span>
-                <input id="profileNameInput" type="text" maxlength="60" placeholder="Name the current layout…" autocomplete="off" />
+                <span class="sr-only">Layout name</span>
+                <input id="layoutNameInput" type="text" maxlength="60" placeholder="Save the current layout as…" autocomplete="off" />
               </label>
-              <button class="secondary-button" id="profileSaveSubmitBtn" type="submit">Save</button>
+              <button class="secondary-button" id="layoutSaveSubmitBtn" type="submit">Save</button>
             </form>
 
-            <div class="status-panel subtle" id="profileSummary">Save the current views and their panes as a profile, then load it from any device.</div>
+            <div class="status-panel subtle" id="layoutSummary">Saved layouts update themselves as you change them and are shared by every device. Scratch stays on this device.</div>
 
-            <div class="profile-list scroll-panel" id="profileList"></div>
+            <div class="layout-list scroll-panel" id="layoutList"></div>
+          </section>
+
+          <section class="sidebar-view" id="browserSidebarView" hidden>
+            <div class="sidebar-head">
+              <button class="mobile-back-button" id="mobileBackFromBrowserListBtn" type="button">‹ Back</button>
+              <div>
+                <p class="section-kicker">Browser</p>
+                <h2>Reports</h2>
+              </div>
+              <div class="sidebar-head-actions">
+                <button class="icon-button" id="reloadReportsBtn" type="button" aria-label="Reload reports">↻</button>
+              </div>
+            </div>
+
+            <form class="layout-save-form" id="reportOpenForm">
+              <label class="composer-field">
+                <span class="sr-only">Path or URL</span>
+                <input id="reportUrlInput" type="text" placeholder="/path/to/report.html, a directory, or https://…" autocomplete="off" spellcheck="false" />
+              </label>
+              <button class="secondary-button" type="submit">Open</button>
+            </form>
+
+            <div class="status-panel subtle" id="reportSummary">Pages opened in the Browser are listed here on every device. Paths are read through the selected target; a directory opens a file listing.</div>
+
+            <div class="layout-list scroll-panel" id="reportList"></div>
           </section>
 
           <section class="sidebar-view ssh-sidebar-view" id="sshSidebarView">
@@ -148,7 +195,7 @@
                 <h2>Connect</h2>
               </div>
               <div class="sidebar-head-actions">
-                <button class="ghost-button head-text-button mobile-only-button" id="mobileProfilesBtn" type="button">Profiles</button>
+                <button class="ghost-button head-text-button mobile-only-button" id="mobileLayoutsBtn" type="button">Layouts</button>
                 <button class="icon-button" id="reloadTargetsBtn" type="button" aria-label="Reload targets">↻</button>
               </div>
             </div>
@@ -248,7 +295,7 @@
           </section>
         </aside>
 
-        <div class="resize-handle sidebar-resize-handle" id="sidebarResizeHandle" role="separator" aria-orientation="vertical"></div>
+        <div class="resize-handle sidebar-resize-handle" id="sidebarResizeHandle" role="separator" aria-orientation="vertical" title="Drag to resize the sidebar"></div>
 
         <main class="editor-region">
           <nav class="mobile-pane-switcher" id="mobilePaneSwitcher" aria-label="Mobile pane switcher" hidden></nav>
@@ -261,6 +308,8 @@
               </div>
               <div class="editor-tools">
                 <button class="mode-button mobile-width-button" id="mobileTerminalWidthBtn" type="button" aria-pressed="false">Fit</button>
+                <button class="ghost-button editor-split-button" id="splitRightBtn" type="button" title="Split right" aria-label="Split right">◫</button>
+                <button class="ghost-button editor-split-button" id="splitDownBtn" type="button" title="Split down" aria-label="Split down">⊟</button>
                 <div class="editor-menu" id="editorMenu">
                   <button class="ghost-button editor-menu-button" id="editorMenuBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="View options" title="View options">⋯</button>
                   <div class="editor-menu-popover" id="editorMenuPopover" role="menu" hidden>
@@ -276,24 +325,12 @@
                         <select id="themeSelectMobile" aria-label="Theme"></select>
                       </label>
                     </div>
-                    <p class="special-key-group-label">Text</p>
-                    <div class="segmented-control editor-mode-control" aria-label="Editor text extent">
-                      <button class="mode-button active" id="allTextModeBtn" type="button" aria-pressed="true">All</button>
+                    <p class="special-key-group-label">View</p>
+                    <div class="segmented-control editor-mode-control" aria-label="Pane view">
+                      <button class="mode-button active" id="allTextModeBtn" type="button" aria-pressed="true">Transcript</button>
                       <button class="mode-button" id="screenModeBtn" type="button" aria-pressed="false">Screen</button>
                     </div>
-                    <p class="editor-menu-hint">All: screen + scrollback, scrolls in the browser. Screen: live viewport, scrolls the pane.</p>
-                    <label class="toggle editor-menu-toggle">
-                      <input id="autoRefreshToggle" type="checkbox" checked />
-                      <span>Auto-refresh</span>
-                    </label>
-                    <button class="ghost-button editor-menu-item" id="refreshTextBtn" type="button">Refresh</button>
-                    <p class="special-key-group-label">View splits</p>
-                    <div class="editor-menu-row">
-                      <button class="ghost-button editor-menu-item" id="splitRightBtn" type="button">Split right</button>
-                      <button class="ghost-button editor-menu-item" id="splitDownBtn" type="button">Split down</button>
-                      <button class="ghost-button editor-menu-item" id="closeViewBtn" type="button">Close view</button>
-                    </div>
-                    <p class="editor-menu-hint">Browser-side splits: each view shows one pane, from any target. Drag the divider to resize; the highlighted view receives input.</p>
+                    <p class="editor-menu-hint">Transcript: this pane's text with its scrollback, scrolled in the browser. Screen: the live window as the terminal shows it, every pane in place; swipes and the wheel scroll the pane itself. Full-screen apps always use Screen.</p>
                     <p class="special-key-group-label">tmux pane size</p>
                     <label class="toggle editor-menu-toggle">
                       <input id="autoFitToggle" type="checkbox" checked />
@@ -308,12 +345,12 @@
             </div>
 
             <div class="pane-tree single" id="paneTree">
-              <pre class="screen-output scroll-panel" id="screenOutput">Waiting for a kitty pane...</pre>
+              <pre class="screen-output scroll-panel" id="screenOutput">Waiting for a pane...</pre>
             </div>
             <button class="latest-output-button" id="latestOutputBtn" type="button" hidden>Latest output ↓</button>
           </section>
 
-          <div class="resize-handle panel-resize-handle" id="panelResizeHandle" role="separator" aria-orientation="horizontal"></div>
+          <div class="resize-handle panel-resize-handle" id="panelResizeHandle" role="separator" aria-orientation="horizontal" title="Drag to set the composer height. Double-click to let it grow with the text again."></div>
 
           <section class="bottom-panel" id="bottomPanel">
             <form id="sendForm" class="send-form">
@@ -370,6 +407,16 @@
           </section>
         </main>
 
+        <button class="browser-handle" id="browserHandleBtn" type="button" hidden aria-label="Open Browser">
+          <svg class="browser-handle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="9"></circle>
+            <path d="M3 12h18"></path>
+            <path d="M12 3a13.5 13.5 0 0 1 0 18"></path>
+            <path d="M12 3a13.5 13.5 0 0 0 0 18"></path>
+          </svg>
+          <span class="browser-handle-label" id="browserHandleLabel">Browser</span>
+        </button>
+
         <aside class="preview-drawer" id="previewDrawer" aria-label="Browser" aria-hidden="true">
           <div class="resize-handle browser-resize-handle" id="browserResizeHandle" role="separator" aria-orientation="vertical"></div>
           <div class="preview-head">
@@ -378,7 +425,8 @@
               <h2 id="previewTitle">Browser</h2>
             </div>
             <div class="preview-head-actions">
-              <button class="mobile-back-button mobile-browser-back-button" id="mobileBrowserBackBtn" type="button">‹ KT Panel</button>
+              <button class="mobile-back-button mobile-browser-back-button" id="mobileBrowserBackBtn" type="button">‹ Terminal</button>
+              <button class="ghost-button head-text-button mobile-only-button" id="mobileReportsBtn" type="button" title="Report list">Reports</button>
               <button class="icon-button" id="pinBrowserBtn" type="button" aria-label="Pin Browser" aria-pressed="false">📌</button>
               <button class="icon-button" id="closePreviewBtn" type="button" aria-label="Hide Browser">×</button>
             </div>
@@ -405,7 +453,6 @@
             allowfullscreen
           ></iframe>
         </aside>
-        <button class="preview-reopen-button" id="reopenPreviewBtn" type="button" hidden aria-label="Reopen Browser">Browser</button>
       </div>
 
       <footer class="status-bar">
@@ -417,7 +464,7 @@
         <div class="status-group secondary">
           <span id="statusMessage">Ready</span>
           <span id="statusPaneName">Pane: -</span>
-          <span id="statusAutoRefresh">Auto-refresh: on</span>
+          <span id="statusAutoRefresh">Updates: live</span>
         </div>
       </footer>
 
@@ -425,7 +472,7 @@
         <form class="auth-card" id="authForm">
           <div>
             <p class="section-kicker">Device Access</p>
-            <h2>Kitty Remote Deck</h2>
+            <h2>Terminal Dock</h2>
             <p class="auth-subtitle" id="authDeviceMeta">Checking saved sign-in state.</p>
           </div>
           <label>
@@ -439,13 +486,13 @@
       <div class="auth-toast" id="authToast" hidden></div>
     </div>
 
-    <script src="/modules/browser-utils.js?v=0.2.1"></script>
-    <script src="/modules/mobile-utils.js?v=0.2.1"></script>
+    <script src="/modules/browser-utils.js?v=0.2.2"></script>
+    <script src="/modules/mobile-utils.js?v=0.2.2"></script>
     <script src="/modules/preview-history.js?v=0.2.1"></script>
     <script src="/modules/composer-utils.js?v=0.2.4"></script>
     <script src="/modules/pane-tree.js?v=0.2.1"></script>
     <script src="/modules/terminal-lines.js?v=0.2.2"></script>
     <script src="/modules/ansi-utils.js?v=0.2.1"></script>
-    <script src="/app.js?v=0.2.15"></script>
+    <script src="/app.js?v=0.2.2"></script>
   </body>
 </html>

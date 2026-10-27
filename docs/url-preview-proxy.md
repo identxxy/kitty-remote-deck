@@ -1,20 +1,15 @@
-# Embedded Browser Proxy
+# Embedded Browser
 
-Kitty Remote Deck turns `http://`, `https://`, and `file://` URLs in terminal output into browser links. Clicking a link opens the right-side embedded Browser drawer without leaving the active kitty session.
+Terminal Dock turns `http://`, `https://`, and `file://` URLs in terminal output into links, and opens them in the embedded Browser on the right without leaving the terminal. The Browser is also a view of its own: the bottom button of the activity bar lists the pages opened so far (`Reports`) and has an address field for paths and URLs. The list is stored on the server (`data/reports.json`), so a report written by an agent on the desk shows up on the iPad.
 
 ## User Flow
 
-1. Select a Local or SSH target.
-2. Open a KT session pane.
-3. Click a URL shown in the terminal text, or type a URL into the Browser address bar.
-4. The right-side Browser drawer slides in and embeds the page in an iframe.
-5. Hide the drawer with `x`.
-6. Use the small right-edge `Browser` handle to reopen the last page.
-7. Use back/forward buttons or the history menu to move through the local Browser history.
-8. Pin the Browser when it should stay open as a fixed right-side column. Unpinned Browser panels close when another part of the workbench is clicked or focused.
-9. Enable top-bar Resize mode and drag the Browser left border to change its width.
-
-Clicking a terminal URL starts a new Browser root page. Browser Back on that root page returns to the KT Panel. Back/forward history is then scoped to address-bar navigation and in-frame navigation from that root, so URLs opened from different panes or topics do not point Back into each other.
+1. Select a target. Browser fetches happen through it: Local targets read the server machine, SSH targets stream the helper to the remote host.
+2. Click a URL in the terminal, enter a path or URL in the Browser view (`/tmp/report.html`, `~/reports/` style paths become `file://` URLs on the target), or pick a report from the list.
+3. The Browser drawer embeds the page. In-page links and GET forms navigate inside the drawer; back/forward and the history menu move through what was opened from the same root.
+4. A directory path shows a file listing (folders first) whose entries open in the drawer.
+5. Pin the drawer to keep it as a fixed column; unpinned drawers close when the rest of the workbench is used, except the Browser view itself. The Browser button in the activity bar reopens the last page.
+6. Each loaded page records itself in `Reports` with its title; entries can be pinned to the top or removed.
 
 Address bar input is normalized before loading:
 
@@ -23,79 +18,56 @@ Address bar input is normalized before loading:
 - `localhost:8080/report.html` becomes `https://localhost:8080/report.html`.
 - `/tmp/report.html` becomes `file:///tmp/report.html` on the selected target.
 
-## Target-Side Fetching
+## Proxy URLs
 
-Browser fetches happen through the active target:
-
-- Local targets run `server/remote_helper.py` directly on the machine running `server.js`.
-- SSH targets stream the same helper over SSH and fetch from the SSH host.
-
-This matters for `file://` URLs and private network URLs. The client browser never reads those paths directly; it asks the server, and the server asks the selected target.
-
-## Resource Proxy
-
-The iframe loads same-origin URLs under:
+Pages load from same-origin proxy URLs shaped like paths:
 
 ```text
-/api/url-resource?targetId=<target-id>&url=<encoded-url>
+/p/<targetId>/<access token>/<scheme>/<host or ->/<path>?<query>
 ```
 
-The proxy supports:
+For example `file:///tmp/report/index.html` on target `mc-tmux` becomes `/p/mc-tmux/<token>/file/-/tmp/report/index.html`. Because the proxy URL mirrors the target URL's path, every relative reference resolves in the browser on its own: `data.json` requested from that page lands on `/p/mc-tmux/<token>/file/-/tmp/report/data.json`, whether it comes from markup, a stylesheet, `fetch()`, `XMLHttpRequest`, an ES module `import`, a web worker script, `srcset` or an element created at runtime. The older `/api/url-resource?targetId=&url=` form is still served for history entries that predate the path form.
 
-- HTML documents
-- CSS stylesheets
-- images
-- fonts
-- media resources such as MP4/WebM, including byte-range requests for playback and seeking
-- JavaScript files requested by the document
-- relative links and CSS `url(...)` references
+`server/url_proxy.js` still rewrites HTML and CSS for the references the browser cannot resolve on its own: absolute target URLs (`file:///...`, `http://localhost:8080/...`), root-relative paths (`/assets/x.css`) and CSS `@import` strings. The page also receives a bridge script, injected first in `<head>`, that:
 
-HTML and CSS resources are rewritten in `server/url_proxy.js` so relative paths keep going through `/api/url-resource`. Rewritten subresources also carry a short-lived scoped preview access token so sandboxed iframe media and asset requests do not depend on same-origin cookies. HTML pages also receive a small bridge script that intercepts in-frame link clicks and GET form submissions. The bridge tells the parent app which target URL should be opened next, so the Browser can keep its address bar, forward/back stack, and history menu synchronized while still loading through the same proxy endpoint.
+- reroutes runtime `fetch()`, `XMLHttpRequest` and `EventSource` calls whose URL is an absolute target URL or a root-relative path;
+- rewrites `src`/`href`/`poster`/`data` attributes on elements added or changed after load (`img.src = "file:///..."`);
+- intercepts link clicks and GET form submits so the drawer, the address bar and the history stay in sync;
+- reports the page's title to the Reports list, including titles set later by script.
 
-For example:
+Which host fetches a resource:
 
-```html
-<link rel="stylesheet" href="style.css">
-<img src="images/plot.png">
-```
+- `file://` always goes through the target.
+- `http(s)://` goes through the target when the host is private (loopback, RFC 1918, link-local, CGNAT and Tailscale ranges, ULA IPv6, bare hostnames, `.local`, `.lan`, `.internal`, `.home.arpa`, `.ts.net`) or the same host the document came from.
+- Other `http(s)://` hosts, typically CDNs such as `cdn.jsdelivr.net` or `cdn.plot.ly`, are loaded directly by the viewing browser. A report on a GPU box without internet access still renders if the iPad has internet; a report that needs a private service on that box goes through the box.
 
-loaded from:
+The proxy serves HTML, CSS, JavaScript, JSON, images, fonts and media (with byte-range requests for playback and seeking). Proxied subresources carry `crossorigin="anonymous"` because the sandboxed frame has an opaque origin.
 
-```text
-file:///tmp/report/index.html
-```
+## Access Tokens
 
-becomes same-origin proxy links for:
-
-```text
-file:///tmp/report/style.css
-file:///tmp/report/images/plot.png
-```
+The frame is sandboxed without `allow-same-origin`, so its requests do not carry the device cookie. `/api/url-access-token` issues a signed token scoped to the target and the opened URL's directory prefix (`KRD_PREVIEW_ACCESS_TTL_MS`, default two hours); the token travels in the proxy path, so every relative resource is authorized automatically. Resources outside that directory (`../shared/lib.js`) need the device cookie and are refused from inside the frame. Navigating to another page issues a new token for that page's directory.
 
 ## Security Model
-
-The preview iframe is sandboxed:
 
 ```html
 sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-presentation allow-scripts"
 ```
 
-It does not receive `allow-same-origin`, so proxied pages cannot read the parent app DOM or cookies as same-origin content. The injected bridge communicates with the parent using `postMessage`; the parent only accepts messages from the Browser iframe and still routes every navigation back through `/api/url-resource`. Device authentication protects the proxy endpoint. For iframe subresources that cannot reliably send the device cookie, the parent app requests a signed preview access token from `/api/url-access-token`; that token is scoped to the selected target and the opened URL's directory prefix and expires shortly.
+Proxied pages run with an opaque origin: they cannot read the parent app, its cookies or `localStorage`, and `Worker`/`SharedWorker` creation fails the same-origin check. Scripts, inline or external, do run. The bridge communicates over `postMessage`; the parent accepts messages only from its own frame and routes every navigation back through the proxy. `meta http-equiv="refresh"` is stripped.
 
 ## Limits
 
-- `file://`, `http://`, and `https://` are the only supported URL schemes.
-- Large non-local responses are capped in `server/remote_helper.py`.
-- HTML and CSS static references are rewritten. Normal anchor clicks and GET forms update the embedded Browser history. Runtime JavaScript that constructs unusual fetch URLs may still need follow-up handling.
-- Meta refresh tags are stripped during HTML rewriting to avoid automatic navigation surprises.
+- `file://`, `http://`, and `https://` only.
+- Large non-local responses are capped in `server/remote_helper.py` (10 MB documents, 8 MB resources).
+- `localStorage`, `sessionStorage`, IndexedDB and web workers are unavailable to proxied pages (opaque origin).
+- Pages that compute absolute URLs for a public host and expect the target to fetch them (for example a public hostname only resolvable inside the target's network) load directly from the viewer instead.
 
 ## Relevant Files
 
-- `public/app.js`: terminal URL linkification, Browser address bar, forward/back history, pin state, outside-click close behavior, and iframe navigation messages.
-- `public/index.html`: right-side Browser drawer markup.
-- `public/styles.css`: Browser drawer, address bar, and right-edge reopen handle styling.
-- `server.js`: `/api/url-resource` API route.
-- `server/url_proxy.js`: HTML/CSS rewriting helpers.
-- `server/remote_helper.py`: target-side URL fetching.
-- `tests/url_proxy.test.mjs`: rewrite behavior tests.
-- `tests/url_relay.test.mjs`: helper fetch behavior tests.
+- `public/app.js`: terminal URL linkification, Browser view and Reports list, address bar, history, pin state, iframe messages.
+- `public/index.html`: Browser view in the sidebar and the right-side drawer.
+- `server.js`: `/p/...` and `/api/url-resource` routes, access tokens, `/api/reports` routes.
+- `server/url_proxy.js`: proxy URL form, host heuristic, HTML/CSS rewriting, bridge script.
+- `server/reports.js`: the Reports store.
+- `server/remote_helper.py`: target-side fetching and directory listings.
+- `tests/url_proxy.test.mjs`, `tests/url_relay.test.mjs`, `tests/reports.test.mjs`.

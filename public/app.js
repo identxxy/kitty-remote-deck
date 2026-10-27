@@ -1,17 +1,18 @@
 const STORAGE_KEY = "kitty-remote-deck-ui";
 const DEBUG_STORAGE_KEY = "kitty-remote-deck-debug";
-const CLIENT_BUILD = "0.2.1";
+const CLIENT_BUILD = "1.0.0";
 const MOBILE_HISTORY_KEY = "krdMobileScreen";
 const LAST_PANE_STORAGE_KEY = "kitty-remote-deck-last-pane";
 const FONT_SIZE_RANGE = { min: 5, max: 18, default: 13 };
-const THEME_SET = new Set(["dark", "graphite", "nord", "mocha", "tokyo", "gruvbox", "rosepine", "light", "latte", "solarized"]);
+const THEME_SET = new Set(["dark", "graphite", "nord", "mocha", "tokyo", "gruvbox", "rosepine", "cyberpunk-dark", "light", "latte", "solarized", "cyberpunk-light"]);
 const TEXT_EXTENT_SET = new Set(["screen", "all"]);
 const MOBILE_TERMINAL_WIDTH_SET = new Set(["fit", "wide"]);
-const MOBILE_SCREEN_SET = new Set(["connect", "sessions", "profiles", "chat", "browser"]);
+const MOBILE_SCREEN_SET = new Set(["connect", "sessions", "layouts", "reports", "chat", "browser"]);
 const SIDEBAR_WIDTH_RANGE = { min: 220, max: 520 };
 // The chat composer grows with its text up to this height; 230 was the old fixed panel height.
 const PANEL_HEIGHT_RANGE = { min: 80, max: 420, default: 160, legacyDefault: 230 };
-const BROWSER_WIDTH_RANGE = { min: 320, max: 900, default: 560 };
+// No fixed pixel cap: the drawer may take up to maxFraction of the viewport, minus the terminal minimum.
+const BROWSER_WIDTH_RANGE = { min: 320, maxFraction: 0.7, default: 560 };
 // Adaptive polling: refresh fast while the pane is changing or just received input,
 // then back off as it goes quiet. Polling pauses while the page is hidden.
 const POLL_ACTIVE_MS = 700;
@@ -124,15 +125,19 @@ const state = {
   // view that the single-selection state below describes.
   paneRoot: null,
   activePaneId: null,
-  // Saved layouts from the server. activeProfileId names the one the current
-  // tree was loaded from until the tree changes; null means the reserved
-  // "Session" layout, which is the unnamed tree the Session Explorer edits.
-  // While a named profile is active, sessionLayout keeps that unnamed tree so
-  // the Sessions tab can bring it back.
-  profiles: [],
-  activeProfileId: null,
-  activeProfileRoot: "",
-  sessionLayout: null,
+  // Saved layouts from the server. activeLayoutId names the one on screen;
+  // null means Scratch, this device's unsaved layout. While a named layout is
+  // active, scratchLayout keeps Scratch so it can be brought back, and
+  // activeLayoutSaved is the serialized form last written to the server.
+  layouts: [],
+  activeLayoutId: null,
+  activeLayoutSaved: "",
+  scratchLayout: null,
+  // Pages opened in the embedded Browser, listed server-side (data/reports.json).
+  reports: [],
+  // The target the Browser fetches through; a report can name another target
+  // than the one the terminal is connected to.
+  previewTargetId: "",
   allTextFollowTail: true,
   previewVisible: false,
   previewPinned: false,
@@ -142,11 +147,15 @@ const state = {
   previewAccessToken: "",
   previewAccessExpiresAt: "",
   mobileScreen: "connect",
+  // Phone screens as a stack: the top is mobileScreen, "back" pops.
+  mobileStack: ["connect"],
   mobileTerminalWidth: "fit",
   resizeEnabled: false,
   sidebarWidth: 320,
   browserWidth: BROWSER_WIDTH_RANGE.default,
   bottomPanelHeight: PANEL_HEIGHT_RANGE.default,
+  // Set by dragging the panel edge: the composer then keeps that height instead of growing with its text.
+  bottomPanelPinned: false,
   imageAttachment: null,
   composerSending: false,
   sessionCreating: false
@@ -171,19 +180,29 @@ const elements = {
   logoutBtn: document.querySelector("#logoutBtn"),
   showSshViewBtn: document.querySelector("#showSshViewBtn"),
   showSessionsViewBtn: document.querySelector("#showSessionsViewBtn"),
-  showProfilesViewBtn: document.querySelector("#showProfilesViewBtn"),
+  showLayoutsViewBtn: document.querySelector("#showLayoutsViewBtn"),
+  showBrowserViewBtn: document.querySelector("#showBrowserViewBtn"),
+  browserSidebarView: document.querySelector("#browserSidebarView"),
+  mobileBackFromBrowserListBtn: document.querySelector("#mobileBackFromBrowserListBtn"),
+  mobileBrowserListBtn: document.querySelector("#mobileBrowserListBtn"),
+  mobileReportsBtn: document.querySelector("#mobileReportsBtn"),
+  reloadReportsBtn: document.querySelector("#reloadReportsBtn"),
+  reportOpenForm: document.querySelector("#reportOpenForm"),
+  reportUrlInput: document.querySelector("#reportUrlInput"),
+  reportSummary: document.querySelector("#reportSummary"),
+  reportList: document.querySelector("#reportList"),
   primarySidebar: document.querySelector("#primarySidebar"),
   sshSidebarView: document.querySelector("#sshSidebarView"),
   sessionsSidebarView: document.querySelector("#sessionsSidebarView"),
-  profilesSidebarView: document.querySelector("#profilesSidebarView"),
-  saveProfileBtn: document.querySelector("#saveProfileBtn"),
-  mobileProfilesBtn: document.querySelector("#mobileProfilesBtn"),
-  mobileBackFromProfilesBtn: document.querySelector("#mobileBackFromProfilesBtn"),
-  reloadProfilesBtn: document.querySelector("#reloadProfilesBtn"),
-  profileSaveForm: document.querySelector("#profileSaveForm"),
-  profileNameInput: document.querySelector("#profileNameInput"),
-  profileSummary: document.querySelector("#profileSummary"),
-  profileList: document.querySelector("#profileList"),
+  layoutsSidebarView: document.querySelector("#layoutsSidebarView"),
+  saveLayoutBtn: document.querySelector("#saveLayoutBtn"),
+  mobileLayoutsBtn: document.querySelector("#mobileLayoutsBtn"),
+  mobileBackFromLayoutsBtn: document.querySelector("#mobileBackFromLayoutsBtn"),
+  reloadLayoutsBtn: document.querySelector("#reloadLayoutsBtn"),
+  layoutSaveForm: document.querySelector("#layoutSaveForm"),
+  layoutNameInput: document.querySelector("#layoutNameInput"),
+  layoutSummary: document.querySelector("#layoutSummary"),
+  layoutList: document.querySelector("#layoutList"),
   sidebarResizeHandle: document.querySelector("#sidebarResizeHandle"),
   panelResizeHandle: document.querySelector("#panelResizeHandle"),
   browserResizeHandle: document.querySelector("#browserResizeHandle"),
@@ -226,6 +245,8 @@ const elements = {
   latestOutputBtn: document.querySelector("#latestOutputBtn"),
   bottomPanel: document.querySelector("#bottomPanel"),
   previewDrawer: document.querySelector("#previewDrawer"),
+  browserHandleBtn: document.querySelector("#browserHandleBtn"),
+  browserHandleLabel: document.querySelector("#browserHandleLabel"),
   previewTitle: document.querySelector("#previewTitle"),
   previewAddress: document.querySelector("#previewAddress"),
   browserAddressForm: document.querySelector("#browserAddressForm"),
@@ -237,11 +258,9 @@ const elements = {
   pinBrowserBtn: document.querySelector("#pinBrowserBtn"),
   mobileBrowserBackBtn: document.querySelector("#mobileBrowserBackBtn"),
   closePreviewBtn: document.querySelector("#closePreviewBtn"),
-  reopenPreviewBtn: document.querySelector("#reopenPreviewBtn"),
   urlPreviewFrame: document.querySelector("#urlPreviewFrame"),
   screenModeBtn: document.querySelector("#screenModeBtn"),
   allTextModeBtn: document.querySelector("#allTextModeBtn"),
-  refreshTextBtn: document.querySelector("#refreshTextBtn"),
   editorMenu: document.querySelector("#editorMenu"),
   editorMenuBtn: document.querySelector("#editorMenuBtn"),
   editorMenuPopover: document.querySelector("#editorMenuPopover"),
@@ -251,7 +270,6 @@ const elements = {
   paneTree: document.querySelector("#paneTree"),
   splitRightBtn: document.querySelector("#splitRightBtn"),
   splitDownBtn: document.querySelector("#splitDownBtn"),
-  closeViewBtn: document.querySelector("#closeViewBtn"),
   sendRawTextBtn: document.querySelector("#sendRawTextBtn"),
   sendTextBtn: document.querySelector("#sendTextBtn"),
   specialKeyMenu: document.querySelector("#specialKeyMenu"),
@@ -267,7 +285,6 @@ const elements = {
   imageAttachmentName: document.querySelector("#imageAttachmentName"),
   imageAttachmentInfo: document.querySelector("#imageAttachmentInfo"),
   removeImageBtn: document.querySelector("#removeImageBtn"),
-  autoRefreshToggle: document.querySelector("#autoRefreshToggle"),
   statusTargetName: document.querySelector("#statusTargetName"),
   statusSocketName: document.querySelector("#statusSocketName"),
   statusMessage: document.querySelector("#statusMessage"),
@@ -577,7 +594,7 @@ function createDebugSnapshot(eventName, event) {
       sessionTree: describeBox(elements.sessionTree),
       editorRegion: describeBox(document.querySelector(".editor-region")),
       previewDrawer: describeBox(elements.previewDrawer),
-      reopenPreviewBtn: describeBox(elements.reopenPreviewBtn)
+      browserHandle: describeBox(elements.browserHandleBtn)
     }
   };
 }
@@ -704,9 +721,8 @@ function getBrowserWidthBounds() {
   const viewportWidth = window.innerWidth || 1200;
   const activityWidth = getActivityBarWidth();
   const sidebarWidth = viewportWidth <= 720 || !state.sidebarVisible ? 0 : getEffectiveSidebarWidth();
-  const handleWidth = state.resizeEnabled && state.sidebarVisible && viewportWidth > 720 ? 6 : 0;
   const minEditorWidth = viewportWidth <= 720 ? 96 : 180;
-  const maxByLayout = viewportWidth - activityWidth - sidebarWidth - handleWidth - minEditorWidth;
+  const maxByLayout = viewportWidth - activityWidth - sidebarWidth - minEditorWidth;
 
   if (viewportWidth <= 720) {
     const min = Math.min(260, Math.max(220, maxByLayout));
@@ -714,7 +730,8 @@ function getBrowserWidthBounds() {
   }
 
   const min = Math.min(BROWSER_WIDTH_RANGE.min, Math.max(260, maxByLayout));
-  const max = Math.max(min, Math.min(BROWSER_WIDTH_RANGE.max, maxByLayout));
+  const maxByFraction = Math.round(viewportWidth * BROWSER_WIDTH_RANGE.maxFraction);
+  const max = Math.max(min, Math.min(maxByFraction, maxByLayout));
   return { min, max };
 }
 
@@ -739,7 +756,7 @@ function normalizeFontSizePx(value) {
   return FONT_SIZE_RANGE.default;
 }
 
-const SIDEBAR_VIEW_SET = new Set(["ssh", "sessions", "profiles"]);
+const SIDEBAR_VIEW_SET = new Set(["ssh", "sessions", "layouts", "browser"]);
 
 function loadUiPreferences() {
   try {
@@ -749,7 +766,6 @@ function loadUiPreferences() {
     }
 
     const parsed = JSON.parse(raw);
-    state.autoRefresh = parsed.autoRefresh !== false;
     state.autoFitPane = parsed.autoFitPane !== false;
     state.uiFontSizePx = normalizeFontSizePx(parsed.uiFontSizePx ?? parsed.uiFontSize);
     state.uiTheme = THEME_SET.has(parsed.uiTheme) ? parsed.uiTheme : "dark";
@@ -767,6 +783,7 @@ function loadUiPreferences() {
     state.previewVisible = Boolean(parsed.previewVisible);
     state.previewPinned = Boolean(parsed.previewPinned);
     state.previewUrl = typeof parsed.previewUrl === "string" ? parsed.previewUrl : "";
+    state.previewTargetId = typeof parsed.previewTargetId === "string" ? parsed.previewTargetId : "";
     state.previewHistory = Array.isArray(parsed.previewHistory)
       ? parsed.previewHistory.filter((url) => typeof url === "string" && url.trim()).slice(-30)
       : [];
@@ -784,13 +801,14 @@ function loadUiPreferences() {
       ? clamp(parsed.sidebarWidth, SIDEBAR_WIDTH_RANGE.min, SIDEBAR_WIDTH_RANGE.max)
       : 320;
     state.browserWidth = Number.isFinite(parsed.browserWidth)
-      ? clamp(parsed.browserWidth, BROWSER_WIDTH_RANGE.min, BROWSER_WIDTH_RANGE.max)
+      ? Math.max(BROWSER_WIDTH_RANGE.min, Math.round(parsed.browserWidth))
       : BROWSER_WIDTH_RANGE.default;
     // A stored value equal to the old default was never chosen by the user; take the new one.
     state.bottomPanelHeight =
       Number.isFinite(parsed.bottomPanelHeight) && parsed.bottomPanelHeight !== PANEL_HEIGHT_RANGE.legacyDefault
         ? clamp(parsed.bottomPanelHeight, PANEL_HEIGHT_RANGE.min, PANEL_HEIGHT_RANGE.max)
         : PANEL_HEIGHT_RANGE.default;
+    state.bottomPanelPinned = Boolean(parsed.bottomPanelPinned);
   } catch (error) {
     state.autoRefresh = true;
     state.autoFitPane = true;
@@ -810,6 +828,7 @@ function loadUiPreferences() {
     state.sidebarWidth = 320;
     state.browserWidth = BROWSER_WIDTH_RANGE.default;
     state.bottomPanelHeight = PANEL_HEIGHT_RANGE.default;
+    state.bottomPanelPinned = false;
   }
 }
 
@@ -864,6 +883,7 @@ function saveUiPreferences() {
       previewVisible: state.previewVisible,
       previewPinned: state.previewPinned,
       previewUrl: state.previewUrl,
+      previewTargetId: state.previewTargetId,
       previewHistory: state.previewHistory,
       previewHistoryIndex: state.previewHistoryIndex,
       resizeEnabled: state.resizeEnabled,
@@ -871,7 +891,8 @@ function saveUiPreferences() {
       sidebarVisible: state.sidebarVisible,
       sidebarWidth: state.sidebarWidth,
       browserWidth: state.browserWidth,
-      bottomPanelHeight: state.bottomPanelHeight
+      bottomPanelHeight: state.bottomPanelHeight,
+      bottomPanelPinned: state.bottomPanelPinned
     })
   );
 }
@@ -904,32 +925,35 @@ function isMobileViewport() {
   return MOBILE_UTILS.isMobileViewport();
 }
 
-function getMobileHistoryScreen() {
-  return MOBILE_UTILS.getHistoryScreen(history.state, MOBILE_HISTORY_KEY, MOBILE_SCREEN_SET);
+const MOBILE_NAV_NONCE = Math.random().toString(36).slice(2);
+const MOBILE_SCREEN_TITLES = {
+  connect: "Connect",
+  sessions: "Sessions",
+  layouts: "Layouts",
+  reports: "Reports",
+  chat: "Terminal",
+  browser: "Browser"
+};
+
+function mobileHistoryEntry(index) {
+  return { [MOBILE_HISTORY_KEY]: state.mobileStack[index], krdIndex: index, krdNonce: MOBILE_NAV_NONCE };
 }
 
-function syncMobileHistory(screen, mode = "push") {
-  if (!isMobileViewport()) {
-    return;
-  }
-
-  MOBILE_UTILS.syncHistory({
-    screen,
-    mode,
-    key: MOBILE_HISTORY_KEY,
-    allowedScreens: MOBILE_SCREEN_SET,
-    historyObject: history,
-    href: window.location.href
-  });
-}
-
-function setMobileScreen(screen, options = {}) {
+// Shows a screen without touching the stack or the browser history.
+function applyMobileScreen(screen) {
   const nextScreen = MOBILE_SCREEN_SET.has(screen) ? screen : "connect";
   state.mobileScreen = nextScreen;
 
-  if (isMobileViewport() && ["connect", "sessions", "profiles"].includes(nextScreen)) {
-    state.previewVisible = false;
-    state.previewPinned = false;
+  if (isMobileViewport()) {
+    if (nextScreen === "browser") {
+      state.previewVisible = Boolean(state.previewUrl);
+    } else {
+      state.previewVisible = false;
+      state.previewPinned = false;
+    }
+    if (nextScreen === "connect") {
+      cancelMobileAutoConnect({ suppress: true });
+    }
   }
 
   if (nextScreen === "connect") {
@@ -938,18 +962,108 @@ function setMobileScreen(screen, options = {}) {
   } else if (nextScreen === "sessions") {
     state.activeSidebarView = "sessions";
     state.sidebarVisible = true;
-  } else if (nextScreen === "profiles") {
-    state.activeSidebarView = "profiles";
+  } else if (nextScreen === "layouts") {
+    state.activeSidebarView = "layouts";
+    state.sidebarVisible = true;
+  } else if (nextScreen === "reports") {
+    state.activeSidebarView = "browser";
     state.sidebarVisible = true;
   } else {
     state.sidebarVisible = false;
   }
 
   applyUiState();
-  if (options.history !== false) {
-    syncMobileHistory(nextScreen, options.history || "push");
+  if (nextScreen === "browser") {
+    syncPreviewFrame();
+  }
+  if (nextScreen === "chat") {
+    refreshPaneAfterMobileReturn();
   }
   sendClientDebug(`setMobileScreen:${nextScreen}`, null, { force: true });
+}
+
+// Forward navigation: pushes the screen (or unwinds to it when it is already
+// on the stack) and mirrors the stack into the browser history, so a swipe
+// back and the in-page back buttons agree. history: "replace" swaps the top,
+// false shows the screen without recording it.
+function setMobileScreen(screen, options = {}) {
+  const nextScreen = MOBILE_SCREEN_SET.has(screen) ? screen : "connect";
+  if (isMobileViewport() && options.history !== false) {
+    const before = state.mobileStack;
+    const after = options.history === "replace"
+      ? MOBILE_UTILS.replaceTop(before, nextScreen)
+      : MOBILE_UTILS.pushScreen(before, nextScreen);
+    state.mobileStack = after;
+    const top = after.length - 1;
+    if (after.length > before.length) {
+      history.pushState(mobileHistoryEntry(top), "", window.location.href);
+    } else if (after.length === before.length) {
+      history.replaceState(mobileHistoryEntry(top), "", window.location.href);
+    } else {
+      // Unwinding: the entries above are ours, so the history can follow.
+      history.go(after.length - before.length);
+    }
+  }
+  applyMobileScreen(nextScreen);
+}
+
+// Makes the current history entry the base of a fresh stack.
+function resetMobileStack(screen) {
+  state.mobileStack = [MOBILE_SCREEN_SET.has(screen) ? screen : "connect"];
+  if (isMobileViewport()) {
+    history.replaceState(mobileHistoryEntry(0), "", window.location.href);
+  }
+}
+
+// Every back button pops one screen. The history follows so that a later
+// swipe back continues from the same place.
+function handleMobileBack() {
+  if (!isMobileViewport() || state.mobileStack.length <= 1) {
+    applyMobileScreen(state.mobileStack[0]);
+    return;
+  }
+  state.mobileStack = MOBILE_UTILS.popScreen(state.mobileStack);
+  applyMobileScreen(state.mobileStack[state.mobileStack.length - 1]);
+  history.back();
+}
+
+function refreshPaneAfterMobileReturn() {
+  if (
+    !isMobileViewport() ||
+    state.mobileScreen !== "chat" ||
+    !state.selectedTargetId ||
+    !hasSelectedWindow()
+  ) {
+    return;
+  }
+
+  refreshScreen({
+    force: true,
+    scrollToBottom: activeExtent() === "all" && state.allTextFollowTail
+  }).catch((error) => setStatus(error.message, "danger"));
+}
+
+// Swipe back/forward and the hardware back key land here.
+function handleMobileHistoryChange(event) {
+  if (!isMobileViewport()) {
+    return;
+  }
+  const result = MOBILE_UTILS.stackForHistoryEntry({
+    stack: state.mobileStack,
+    entry: event.state,
+    key: MOBILE_HISTORY_KEY,
+    nonce: MOBILE_NAV_NONCE,
+    allowedScreens: MOBILE_SCREEN_SET
+  });
+  state.mobileStack = result.stack;
+  if (result.foreign) {
+    history.replaceState(mobileHistoryEntry(0), "", window.location.href);
+  }
+  if (result.screen !== state.mobileScreen) {
+    applyMobileScreen(result.screen);
+  } else {
+    applyUiState();
+  }
 }
 
 function cancelMobileAutoConnect(options = {}) {
@@ -1006,58 +1120,6 @@ function scheduleMobileAutoConnect(options = {}) {
   }, MOBILE_AUTO_CONNECT_DELAY_MS);
 }
 
-function handleMobileBack(targetScreen) {
-  if (targetScreen === "connect") {
-    cancelMobileAutoConnect({ suppress: true });
-  }
-  setMobileScreen(targetScreen, { history: "replace" });
-}
-
-function refreshPaneAfterMobileReturn() {
-  if (
-    !isMobileViewport() ||
-    state.mobileScreen !== "chat" ||
-    !state.selectedTargetId ||
-    !hasSelectedWindow()
-  ) {
-    return;
-  }
-
-  refreshScreen({
-    force: true,
-    scrollToBottom: activeExtent() === "all" && state.allTextFollowTail
-  }).catch((error) => setStatus(error.message, "danger"));
-}
-
-function handleMobileHistoryChange(event) {
-  if (!isMobileViewport()) {
-    return;
-  }
-
-  const screen = event.state?.[MOBILE_HISTORY_KEY];
-  const nextScreen = MOBILE_SCREEN_SET.has(screen) ? screen : "connect";
-
-  if (nextScreen === "connect") {
-    cancelMobileAutoConnect({ suppress: true });
-  }
-
-  if (nextScreen === "browser") {
-    state.previewVisible = Boolean(state.previewUrl);
-    setMobileScreen("browser", { history: false });
-    syncPreviewFrame();
-    return;
-  }
-
-  if (state.previewVisible && nextScreen === "chat") {
-    state.previewVisible = false;
-  }
-
-  setMobileScreen(nextScreen, { history: false });
-  if (nextScreen === "chat") {
-    refreshPaneAfterMobileReturn();
-  }
-}
-
 function applyUiState() {
   if (isMobileViewport()) {
     state.sidebarVisible = state.mobileScreen !== "chat";
@@ -1065,23 +1127,28 @@ function applyUiState() {
       state.activeSidebarView = "ssh";
     } else if (state.mobileScreen === "sessions") {
       state.activeSidebarView = "sessions";
-    } else if (state.mobileScreen === "profiles") {
-      state.activeSidebarView = "profiles";
+    } else if (state.mobileScreen === "layouts") {
+      state.activeSidebarView = "layouts";
+    } else if (state.mobileScreen === "reports") {
+      state.activeSidebarView = "browser";
     }
   }
 
   const showingSsh = state.activeSidebarView === "ssh";
   const showingSessions = state.activeSidebarView === "sessions";
-  const showingProfiles = state.activeSidebarView === "profiles";
+  const showingLayouts = state.activeSidebarView === "layouts";
+  const showingBrowser = state.activeSidebarView === "browser";
   elements.sshSidebarView.hidden = !showingSsh;
   elements.sessionsSidebarView.hidden = !showingSessions;
-  elements.profilesSidebarView.hidden = !showingProfiles;
+  elements.layoutsSidebarView.hidden = !showingLayouts;
+  elements.browserSidebarView.hidden = !showingBrowser;
   elements.appShell.classList.toggle("sidebar-hidden", !state.sidebarVisible);
   elements.appShell.classList.toggle("preview-open", state.previewVisible);
   elements.appShell.classList.toggle("browser-pinned", state.previewVisible && state.previewPinned);
   elements.appShell.classList.toggle("mobile-screen-connect", state.mobileScreen === "connect");
   elements.appShell.classList.toggle("mobile-screen-sessions", state.mobileScreen === "sessions");
-  elements.appShell.classList.toggle("mobile-screen-profiles", state.mobileScreen === "profiles");
+  elements.appShell.classList.toggle("mobile-screen-layouts", state.mobileScreen === "layouts");
+  elements.appShell.classList.toggle("mobile-screen-reports", state.mobileScreen === "reports");
   elements.appShell.classList.toggle("mobile-screen-chat", state.mobileScreen === "chat");
   elements.appShell.classList.toggle("mobile-screen-browser", state.mobileScreen === "browser");
   elements.appShell.classList.toggle("mobile-terminal-wide", state.mobileTerminalWidth === "wide");
@@ -1089,12 +1156,14 @@ function applyUiState() {
   elements.showSessionsViewBtn.classList.toggle("active", state.sidebarVisible && showingSessions);
   elements.showSshViewBtn.setAttribute("aria-pressed", String(state.sidebarVisible && showingSsh));
   elements.showSessionsViewBtn.setAttribute("aria-pressed", String(state.sidebarVisible && showingSessions));
-  elements.showProfilesViewBtn.classList.toggle("active", state.sidebarVisible && showingProfiles);
-  elements.showProfilesViewBtn.setAttribute("aria-pressed", String(state.sidebarVisible && showingProfiles));
+  elements.showLayoutsViewBtn.classList.toggle("active", state.sidebarVisible && showingLayouts);
+  elements.showLayoutsViewBtn.setAttribute("aria-pressed", String(state.sidebarVisible && showingLayouts));
+  elements.showBrowserViewBtn.classList.toggle("active", state.sidebarVisible && showingBrowser);
+  elements.showBrowserViewBtn.setAttribute("aria-pressed", String(state.sidebarVisible && showingBrowser));
   elements.appShell.classList.toggle("resize-enabled", state.resizeEnabled);
   elements.previewDrawer.setAttribute("aria-hidden", String(!state.previewVisible));
-  elements.reopenPreviewBtn.hidden = state.previewVisible || !state.previewUrl;
-  elements.reopenPreviewBtn.setAttribute("aria-hidden", String(state.previewVisible || !state.previewUrl));
+  applyBrowserHandle();
+  applyMobileBackLabels();
   elements.browserBackBtn.disabled = state.previewHistoryIndex < 0;
   elements.browserForwardBtn.disabled = state.previewHistoryIndex < 0 || state.previewHistoryIndex >= state.previewHistory.length - 1;
   elements.browserGoBtn.disabled = !state.selectedTargetId;
@@ -1105,7 +1174,6 @@ function applyUiState() {
     elements.browserAddressInput.value = state.previewUrl;
   }
   renderBrowserHistoryOptions();
-  elements.autoRefreshToggle.checked = state.autoRefresh;
   elements.autoFitToggle.checked = state.autoFitPane;
   elements.fontSizeValue.textContent = `${state.uiFontSizePx}px`;
   elements.themeSelect.value = state.uiTheme;
@@ -1122,7 +1190,6 @@ function applyUiState() {
   elements.allTextModeBtn.classList.toggle("active", state.screenExtent === "all");
   elements.screenModeBtn.setAttribute("aria-pressed", String(state.screenExtent === "screen"));
   elements.allTextModeBtn.setAttribute("aria-pressed", String(state.screenExtent === "all"));
-  elements.refreshTextBtn.textContent = state.screenExtent === "all" ? "Refresh All" : "Refresh";
   elements.screenOutput.dataset.extent = activeExtent();
   elements.mobileTerminalWidthBtn.classList.toggle("active", state.mobileTerminalWidth === "wide");
   elements.mobileTerminalWidthBtn.setAttribute("aria-pressed", String(state.mobileTerminalWidth === "wide"));
@@ -1130,7 +1197,7 @@ function applyUiState() {
   elements.mobileTerminalWidthBtn.title = state.mobileTerminalWidth === "wide"
     ? "Keep the terminal's original width and allow horizontal scrolling"
     : "Fit terminal text to the phone width";
-  elements.resizeToggle.checked = state.resizeEnabled;
+  elements.resizeToggle.setAttribute("aria-pressed", String(state.resizeEnabled));
   document.documentElement.style.setProperty("--root-font-size", `${state.uiFontSizePx}px`);
   document.documentElement.dataset.theme = state.uiTheme;
   document.documentElement.style.setProperty("--sidebar-width", `${getEffectiveSidebarWidth()}px`);
@@ -1140,10 +1207,114 @@ function applyUiState() {
   applyResizeLabel();
   updateStatusBar();
   saveUiPreferences();
+  // Pinning, unpinning or navigating the Browser changes the active layout.
+  scheduleLayoutAutosave();
+}
+
+// Each phone screen's back button names the screen underneath it.
+const MOBILE_BACK_BUTTONS = {
+  sessions: "mobileBackToConnectBtn",
+  chat: "mobileBackToSessionsBtn",
+  layouts: "mobileBackFromLayoutsBtn",
+  reports: "mobileBackFromBrowserListBtn",
+  browser: "mobileBrowserBackBtn"
+};
+
+function applyMobileBackLabels() {
+  if (!isMobileViewport()) {
+    return;
+  }
+  const stack = state.mobileStack;
+  const below = stack.length > 1 ? stack[stack.length - 2] : null;
+  Object.entries(MOBILE_BACK_BUTTONS).forEach(([screen, id]) => {
+    const button = elements[id];
+    if (!button) {
+      return;
+    }
+    if (screen === state.mobileScreen) {
+      button.textContent = `‹ ${MOBILE_SCREEN_TITLES[below] || "Back"}`;
+    }
+  });
+}
+
+// The right-edge tab shows while a Browser page exists but the drawer is
+// hidden; on a phone only on the terminal screen.
+function applyBrowserHandle() {
+  const visible = Boolean(state.previewUrl) && !state.previewVisible && (!isMobileViewport() || state.mobileScreen === "chat");
+  elements.browserHandleBtn.hidden = !visible;
+  if (!visible) {
+    return;
+  }
+  const label = browserHandleLabel();
+  elements.browserHandleLabel.textContent = label;
+  elements.browserHandleBtn.title = label;
+  elements.browserHandleBtn.setAttribute("aria-label", `Open Browser: ${label}`);
+}
+
+function browserHandleLabel() {
+  const report = state.reports.find((item) => item.url === state.previewUrl && (!state.previewTargetId || item.targetId === state.previewTargetId));
+  return reportLabel(report || { url: state.previewUrl });
+}
+
+// Tap or a leftward swipe opens the Browser; the tab follows the finger first.
+let browserHandleGesture = null;
+
+function resetBrowserHandleGesture() {
+  browserHandleGesture = null;
+  elements.browserHandleBtn.classList.remove("dragging");
+  elements.browserHandleBtn.style.transform = "";
+}
+
+function attachBrowserHandle() {
+  const button = elements.browserHandleBtn;
+  button.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 && event.pointerType === "mouse") {
+      return;
+    }
+    browserHandleGesture = { id: event.pointerId, startX: event.clientX, startY: event.clientY, moved: false };
+    button.classList.add("dragging");
+    try {
+      button.setPointerCapture(event.pointerId);
+    } catch (error) {
+      // No capture: the swipe still works while the pointer stays on the tab.
+    }
+  });
+  button.addEventListener("pointermove", (event) => {
+    if (!browserHandleGesture || event.pointerId !== browserHandleGesture.id) {
+      return;
+    }
+    const dx = clamp(event.clientX - browserHandleGesture.startX, -56, 0);
+    if (dx < -8) {
+      browserHandleGesture.moved = true;
+    }
+    button.style.transform = `translate(${dx}px, -50%)`;
+  });
+  button.addEventListener("pointerup", (event) => {
+    if (!browserHandleGesture || event.pointerId !== browserHandleGesture.id) {
+      return;
+    }
+    const dx = event.clientX - browserHandleGesture.startX;
+    const dy = Math.abs(event.clientY - browserHandleGesture.startY);
+    const tap = !browserHandleGesture.moved && dy < 16;
+    resetBrowserHandleGesture();
+    if (tap || dx <= -24) {
+      reopenPreview().catch((error) => setStatus(error.message, "danger"));
+    }
+  });
+  button.addEventListener("pointercancel", resetBrowserHandleGesture);
+  // Keyboard activation arrives as a click without pointer events.
+  button.addEventListener("click", (event) => {
+    if (event.detail === 0) {
+      reopenPreview().catch((error) => setStatus(error.message, "danger"));
+    }
+  });
 }
 
 function applyResizeLabel() {
-  elements.resizeLabel.textContent = state.resizeEnabled ? "Resize Unlocked" : "Layout Locked";
+  elements.resizeLabel.textContent = state.resizeEnabled ? "Unlocked" : "Locked";
+  elements.resizeToggle.title = state.resizeEnabled
+    ? "Layout unlocked. Drag the sidebar and bottom panel edges; click to lock."
+    : "Layout locked. Click to allow dragging the sidebar and bottom panel edges.";
 }
 
 function stepFontSize(delta) {
@@ -1208,16 +1379,23 @@ function replaceLoadedPreviewUrl(url) {
   applyPreviewHistoryState(PREVIEW_HISTORY.replaceLoaded(getPreviewHistoryState(), url));
 }
 
+// The target the Browser reads through: the report's own target when one was
+// opened from the list, otherwise the connected target.
+function getPreviewTarget() {
+  return state.targets.find((target) => target.id === state.previewTargetId) || getSelectedTarget();
+}
+
 async function refreshPreviewAccessToken() {
-  const target = getSelectedTarget();
+  const target = getPreviewTarget();
   if (!target || !state.previewUrl) {
     state.previewAccessToken = "";
     state.previewAccessExpiresAt = "";
     return false;
   }
+  state.previewTargetId = target.id;
 
   const params = new URLSearchParams({
-    targetId: state.selectedTargetId,
+    targetId: target.id,
     url: state.previewUrl
   });
   const data = await apiFetch(`/api/url-access-token?${params.toString()}`);
@@ -1227,16 +1405,23 @@ async function refreshPreviewAccessToken() {
 }
 
 function syncPreviewFrame() {
-  const target = getSelectedTarget();
+  const target = getPreviewTarget();
   if (!target || !state.previewUrl) {
     return false;
   }
 
-  const nextSrc = createPreviewResourceUrl(state.previewUrl, state.selectedTargetId);
+  const nextSrc = createPreviewResourceUrl(state.previewUrl, target.id);
   elements.previewTitle.textContent = target.name ? `${target.name} Browser` : "Browser";
   elements.previewAddress.textContent = state.previewUrl;
-  if (elements.urlPreviewFrame.getAttribute("src") !== nextSrc) {
-    elements.urlPreviewFrame.src = nextSrc;
+  if (elements.urlPreviewFrame.dataset.src !== nextSrc) {
+    elements.urlPreviewFrame.dataset.src = nextSrc;
+    // location.replace keeps the frame out of the browser's history, so a
+    // swipe back on the phone pops a deck screen instead of a frame page.
+    try {
+      elements.urlPreviewFrame.contentWindow.location.replace(nextSrc);
+    } catch (error) {
+      elements.urlPreviewFrame.src = nextSrc;
+    }
   }
   return true;
 }
@@ -1313,7 +1498,7 @@ function updateStatusBar() {
   elements.statusTargetName.textContent = `Target: ${target ? target.name : "-"}`;
   elements.statusSocketName.textContent = `Socket: ${state.selectedSocket || "auto"}`;
   elements.statusPaneName.textContent = pane ? `Pane: ${describePaneLocation(pane)}` : "Pane: -";
-  elements.statusAutoRefresh.textContent = `Auto-refresh: ${!state.autoRefresh ? "off" : isPrimaryLive() ? "live" : "on"}`;
+  elements.statusAutoRefresh.textContent = `Updates: ${isPrimaryLive() ? "live" : "polling"}`;
 }
 
 function isScreenOutputNearBottom(threshold = 48) {
@@ -1500,7 +1685,10 @@ function renderScreenText(text, options = {}) {
 function updateLatestOutputButton() {
   const awayFromLatest =
     activeExtent() === "all" ? !state.allTextFollowTail : viewportScrolledBack;
-  elements.latestOutputBtn.hidden = !hasSelectedWindow() || !awayFromLatest;
+  const hidden = !hasSelectedWindow() || !awayFromLatest;
+  if (elements.latestOutputBtn.hidden !== hidden) {
+    elements.latestOutputBtn.hidden = hidden;
+  }
 }
 
 // Return to the live end: Screen mode scrolls the kitty viewport back to its end;
@@ -1530,11 +1718,20 @@ function renderPaneLoading(windowId) {
   elements.screenOutput.scrollTop = 0;
 }
 
+// Scroll events arrive per frame while swiping; the bookkeeping runs once per
+// animation frame and touches the DOM only when something changes.
+let screenScrollFrame = 0;
 function handleScreenOutputScroll() {
-  if (activeExtent() !== "all") {
+  if (activeExtent() !== "all" || screenScrollFrame) {
     return;
   }
+  screenScrollFrame = requestAnimationFrame(() => {
+    screenScrollFrame = 0;
+    trackTranscriptScroll();
+  });
+}
 
+function trackTranscriptScroll() {
   const wasFollowing = state.allTextFollowTail;
   state.allTextFollowTail = isScreenOutputNearBottom();
   updateLatestOutputButton();
@@ -1680,9 +1877,10 @@ function autosizeComposer() {
     return;
   }
   const maxHeight = state.bottomPanelHeight || PANEL_HEIGHT_RANGE.default;
+  const minHeight = state.bottomPanelPinned ? maxHeight : 0;
   input.style.height = "auto";
   const contentHeight = input.scrollHeight;
-  input.style.height = `${Math.min(contentHeight, maxHeight)}px`;
+  input.style.height = `${Math.max(minHeight, Math.min(contentHeight, maxHeight))}px`;
   input.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
 }
 
@@ -2306,14 +2504,13 @@ function loadPaneLayout() {
   try {
     const parsed = JSON.parse(localStorage.getItem(PANE_LAYOUT_STORAGE_KEY) || "null");
     if (parsed) {
-      const layout = PANE_TREE.decodePersistedPaneLayout(parsed);
-      state.paneRoot = layout.paneRoot;
-      state.activePaneId = layout.activePaneId;
-      if (typeof parsed.activeProfileId === "string" && layout.paneRoot) {
-        state.activeProfileId = parsed.activeProfileId;
-        state.activeProfileRoot = JSON.stringify(layout.paneRoot);
-        const stash = PANE_TREE.decodePersistedPaneLayout({ paneVersion: 1, ...(parsed.sessionLayout || {}) });
-        state.sessionLayout = stash.paneRoot ? stash : null;
+      const decoded = PANE_TREE.decodePersistedPaneLayout(parsed);
+      state.paneRoot = decoded.paneRoot;
+      state.activePaneId = decoded.activePaneId;
+      const activeId = parsed.activeLayoutId ?? parsed.activeProfileId;
+      if (typeof activeId === "string" && decoded.paneRoot) {
+        state.activeLayoutId = activeId;
+        state.scratchLayout = decodeLayoutPayload(parsed.scratchLayout || parsed.sessionLayout);
       }
     }
   } catch (error) {
@@ -2330,113 +2527,243 @@ function savePaneLayout() {
         paneVersion: 1,
         paneRoot: state.paneRoot,
         activePaneId: state.activePaneId,
-        activeProfileId: state.activeProfileId || undefined,
-        sessionLayout: (state.activeProfileId && state.sessionLayout) || undefined
+        activeLayoutId: state.activeLayoutId || undefined,
+        scratchLayout: (state.activeLayoutId && state.scratchLayout) || undefined
       })
     );
   } catch (error) {
     // Storage can be unavailable; the layout then lasts for this page only.
   }
-  // The tree is "the profile" only while it still matches what was loaded;
-  // switching the active view alone keeps it, changing a split or pane does not.
-  // A changed tree becomes the unnamed Session layout.
-  if (state.activeProfileId && JSON.stringify(state.paneRoot) !== state.activeProfileRoot) {
-    state.activeProfileId = null;
-    state.activeProfileRoot = "";
-    state.sessionLayout = null;
+  scheduleLayoutAutosave();
+  // Keeps the Scratch row's description current.
+  renderLayouts();
+}
+
+// Layouts: a pane tree plus the pinned Browser, saved on the server
+// (data/layouts.json) so the same layouts can be loaded from the desk, the
+// iPad and the phone. A named layout is a live document: every change made
+// while it is active is written back. "Scratch" is the unnamed layout of this
+// device only; it is what you work in until you save it under a name.
+const SCRATCH_LAYOUT_ID = "__scratch__";
+const LAYOUT_AUTOSAVE_DELAY_MS = 600;
+let layoutAutosaveTimer = 0;
+let layoutApplying = false;
+
+function normalizeBrowserState(raw) {
+  if (!raw || typeof raw.url !== "string" || !raw.url) {
+    return null;
+  }
+  return { url: raw.url, targetId: typeof raw.targetId === "string" ? raw.targetId : "" };
+}
+
+// A layout as the client stores and sends it: tree, active view, pinned Browser.
+function decodeLayoutPayload(raw) {
+  if (!raw) {
+    return null;
+  }
+  const decoded = PANE_TREE.decodePersistedPaneLayout({ paneVersion: 1, paneRoot: raw.paneRoot, activePaneId: raw.activePaneId });
+  if (!decoded.paneRoot) {
+    return null;
+  }
+  return { paneRoot: decoded.paneRoot, activePaneId: decoded.activePaneId, browser: normalizeBrowserState(raw.browser) };
+}
+
+// The Browser belongs to a layout only while it is pinned. Phones never pin,
+// so from a phone the layout keeps whatever Browser it already had.
+function pinnedBrowserState() {
+  if (isMobileViewport()) {
+    const active = state.layouts.find((item) => item.id === state.activeLayoutId);
+    return active ? normalizeBrowserState(active.browser) : null;
+  }
+  if (state.previewPinned && state.previewVisible && state.previewUrl) {
+    return { url: state.previewUrl, targetId: state.previewTargetId || state.selectedTargetId || "" };
+  }
+  return null;
+}
+
+// The current layout without side effects (no selection sync), for comparisons.
+function layoutSnapshot() {
+  ensurePaneTree();
+  return { paneRoot: state.paneRoot, activePaneId: state.activePaneId, browser: pinnedBrowserState() };
+}
+
+function currentLayoutPayload() {
+  ensurePaneTree();
+  syncActivePaneActor();
+  return layoutSnapshot();
+}
+
+function scheduleLayoutAutosave() {
+  if (!state.activeLayoutId || layoutApplying) {
+    return;
+  }
+  clearTimeout(layoutAutosaveTimer);
+  layoutAutosaveTimer = setTimeout(() => {
+    layoutAutosaveTimer = 0;
+    autosaveActiveLayout().catch((error) => setStatus(`Layout not saved: ${error.message}`, "danger"));
+  }, LAYOUT_AUTOSAVE_DELAY_MS);
+}
+
+async function autosaveActiveLayout() {
+  const layout = state.layouts.find((item) => item.id === state.activeLayoutId);
+  if (!layout || layoutApplying) {
+    return;
+  }
+  const payload = layoutSnapshot();
+  const serialized = JSON.stringify(payload);
+  if (serialized === state.activeLayoutSaved) {
+    return;
+  }
+  const data = await apiFetch("/api/layouts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ layout: { id: layout.id, name: layout.name, ...payload } })
+  });
+  state.activeLayoutSaved = serialized;
+  const index = state.layouts.findIndex((item) => item.id === data.layout.id);
+  if (index >= 0) {
+    state.layouts[index] = data.layout;
+  }
+  renderLayouts();
+}
+
+// Puts a layout on screen: tree, bound selection, pinned Browser.
+async function applyLayoutPayload(payload) {
+  layoutApplying = true;
+  try {
+    state.paneRoot = payload.paneRoot;
+    state.activePaneId = payload.activePaneId;
+    savePaneLayout();
+    renderPaneTree();
+    await bindSelectionToActor(activeLeaf().actor);
+    if (isMobileViewport()) {
+      return;
+    }
+    if (payload.browser) {
+      const hasTarget = state.targets.some((item) => item.id === payload.browser.targetId);
+      state.previewPinned = true;
+      await loadUrlPreview(payload.browser.url, { targetId: hasTarget ? payload.browser.targetId : undefined, history: "reset" });
+    } else if (state.previewPinned) {
+      state.previewPinned = false;
+      state.previewVisible = false;
+      applyUiState();
+    }
+  } finally {
+    layoutApplying = false;
+  }
+}
+
+// Takes the server's copy of the active layout without touching the
+// connection: used at start-up and on Reload, so edits made on another device win.
+async function adoptActiveLayout() {
+  const layout = state.layouts.find((item) => item.id === state.activeLayoutId);
+  const payload = layout ? decodeLayoutPayload(layout) : null;
+  if (!payload) {
+    // Deleted elsewhere: the current tree carries on as Scratch.
+    state.activeLayoutId = null;
+    state.activeLayoutSaved = "";
+    state.scratchLayout = null;
     savePaneLayout();
     return;
   }
-  // Keeps the reserved Session row's description current.
-  renderProfiles();
-}
-
-const SESSION_PROFILE_ID = "__session__";
-
-// The layout the reserved "Session" row stands for: the stashed tree while a
-// named profile is active, otherwise the current tree itself.
-function sessionLayoutSnapshot() {
-  if (state.activeProfileId && state.sessionLayout) {
-    return state.sessionLayout;
+  layoutApplying = true;
+  try {
+    state.paneRoot = payload.paneRoot;
+    state.activePaneId = payload.activePaneId;
+    savePaneLayout();
+    renderPaneTree();
+    if (!isMobileViewport()) {
+      if (payload.browser) {
+        state.previewTargetId = payload.browser.targetId || state.previewTargetId;
+        rememberPreviewUrl(payload.browser.url, "reset");
+        state.previewPinned = true;
+        state.previewVisible = true;
+        await refreshPreviewAccessToken();
+        syncPreviewFrame();
+      } else if (state.previewPinned) {
+        state.previewPinned = false;
+        state.previewVisible = false;
+      }
+      applyUiState();
+    }
+  } finally {
+    layoutApplying = false;
   }
-  return state.paneRoot ? { paneRoot: state.paneRoot, activePaneId: state.activePaneId } : null;
+  state.activeLayoutSaved = JSON.stringify(layoutSnapshot());
 }
 
-// Switches back to the unnamed Session layout. Returns false when it was
-// already active, so callers can keep their usual tab behaviour.
-async function activateSessionLayout() {
-  if (!state.activeProfileId) {
+// Switches back to Scratch. Returns false when it was already active.
+async function activateScratchLayout() {
+  if (!state.activeLayoutId) {
     return false;
   }
-  const stash = state.sessionLayout;
-  state.activeProfileId = null;
-  state.activeProfileRoot = "";
-  state.sessionLayout = null;
+  const stash = state.scratchLayout;
+  state.activeLayoutId = null;
+  state.activeLayoutSaved = "";
+  state.scratchLayout = null;
   if (stash) {
-    state.paneRoot = stash.paneRoot;
-    state.activePaneId = stash.activePaneId;
+    await applyLayoutPayload(stash);
+  } else {
+    savePaneLayout();
   }
-  savePaneLayout();
-  renderProfiles();
-  if (stash) {
-    renderPaneTree();
-    await bindSelectionToActor(activeLeaf().actor);
-  }
-  setStatus("Back to the Session layout.", "neutral");
+  renderLayouts();
+  setStatus("Back to Scratch.", "neutral");
   return true;
 }
 
-// Profiles: named pane trees saved on the server (data/profiles.json), so the
-// same layouts can be loaded from the desk, the iPad and the phone.
-async function loadProfiles() {
+async function loadLayouts(options = {}) {
   try {
-    const data = await apiFetch("/api/profiles");
-    state.profiles = Array.isArray(data.profiles) ? data.profiles : [];
+    const data = await apiFetch("/api/layouts");
+    state.layouts = Array.isArray(data.layouts) ? data.layouts : [];
   } catch (error) {
-    state.profiles = [];
-    elements.profileSummary.textContent = `Profiles unavailable: ${error.message}`;
+    state.layouts = [];
+    elements.layoutSummary.textContent = `Layouts unavailable: ${error.message}`;
   }
-  renderProfiles();
+  if (options.adoptActive && state.activeLayoutId) {
+    await adoptActiveLayout();
+  }
+  renderLayouts();
 }
 
-function describeProfile(profile) {
-  const leafNodes = PANE_TREE.leaves(profile.paneRoot);
+function describeLayout(layout) {
+  const leafNodes = PANE_TREE.leaves(layout.paneRoot);
   const parts = leafNodes.map((leafNode) => {
     const target = state.targets.find((item) => item.id === leafNode.actor.targetId);
     const name = target ? target.name : leafNode.actor.targetId || "unbound";
     return leafNode.actor.windowId === null ? name : `${name} #${leafNode.actor.windowId}`;
   });
-  return `${leafNodes.length} view${leafNodes.length === 1 ? "" : "s"} · ${parts.join(", ")}`;
+  const browser = normalizeBrowserState(layout.browser);
+  return `${leafNodes.length} view${leafNodes.length === 1 ? "" : "s"} · ${parts.join(", ")}${browser ? " · Browser" : ""}`;
 }
 
-function renderProfiles() {
-  if (!elements.profileList) {
+function renderLayouts() {
+  if (!elements.layoutList) {
     return;
   }
-  const sessionSnapshot = sessionLayoutSnapshot();
-  const sessionRow = `
-    <div class="profile-row reserved ${state.activeProfileId ? "" : "active"}" data-profile-id="${SESSION_PROFILE_ID}">
-      <button class="profile-row-main" type="button" data-profile-action="load" title="Switch to the unnamed layout the Session Explorer edits">
-        <strong>Session <span class="profile-badge">reserved</span></strong>
-        <small>${escapeHtml(sessionSnapshot ? describeProfile(sessionSnapshot) : "No views yet")}</small>
+  const scratch = state.activeLayoutId ? state.scratchLayout : layoutSnapshot();
+  const scratchRow = `
+    <div class="layout-row reserved ${state.activeLayoutId ? "" : "active"}" data-layout-id="${SCRATCH_LAYOUT_ID}">
+      <button class="layout-row-main" type="button" data-layout-action="load" title="The unsaved layout of this device. Work here, then save it under a name.">
+        <strong>Scratch <span class="layout-badge">this device</span></strong>
+        <small>${escapeHtml(scratch ? describeLayout(scratch) : "No views yet")}</small>
       </button>
     </div>
   `;
-  const emptyNote = state.profiles.length
+  const emptyNote = state.layouts.length
     ? ""
-    : `<p class="empty-note">No saved profiles yet. Arrange your views, then save them with a name above.</p>`;
-  elements.profileList.innerHTML = sessionRow + emptyNote + state.profiles
-    .map((profile) => {
-      const active = profile.id === state.activeProfileId ? "active" : "";
+    : `<p class="empty-note">No saved layouts yet. Arrange your views, then save them with a name above.</p>`;
+  elements.layoutList.innerHTML = scratchRow + emptyNote + state.layouts
+    .map((layout) => {
+      const active = layout.id === state.activeLayoutId ? "active" : "";
       return `
-        <div class="profile-row ${active}" data-profile-id="${escapeHtml(profile.id)}">
-          <button class="profile-row-main" type="button" data-profile-action="load" title="Load this profile">
-            <strong>${escapeHtml(profile.name)}</strong>
-            <small>${escapeHtml(describeProfile(profile))}</small>
+        <div class="layout-row ${active}" data-layout-id="${escapeHtml(layout.id)}">
+          <button class="layout-row-main" type="button" data-layout-action="load" title="Switch to this layout">
+            <strong>${escapeHtml(layout.name)}</strong>
+            <small>${escapeHtml(describeLayout(layout))}</small>
           </button>
-          <div class="profile-row-actions">
-            <button class="icon-button" type="button" data-profile-action="overwrite" aria-label="Overwrite with the current layout" title="Overwrite with the current layout">⤓</button>
-            <button class="icon-button" type="button" data-profile-action="delete" aria-label="Delete profile" title="Delete profile">×</button>
+          <div class="layout-row-actions">
+            <button class="icon-button" type="button" data-layout-action="duplicate" aria-label="Duplicate layout" title="Duplicate layout">⧉</button>
+            <button class="icon-button" type="button" data-layout-action="delete" aria-label="Delete layout" title="Delete layout">×</button>
           </div>
         </div>
       `;
@@ -2444,92 +2771,104 @@ function renderProfiles() {
     .join("");
 }
 
-function currentLayoutPayload() {
-  ensurePaneTree();
-  syncActivePaneActor();
-  return { paneRoot: state.paneRoot, activePaneId: state.activePaneId };
-}
-
-async function saveProfile(name, id = null) {
-  const layout = currentLayoutPayload();
-  const bound = PANE_TREE.leaves(layout.paneRoot).filter((leafNode) => leafNode.actor.windowId !== null);
+// Saves the current layout under a new name and switches to it. Saved from
+// Scratch, a copy stays behind as Scratch.
+async function saveLayoutAs(name) {
+  const payload = currentLayoutPayload();
+  const bound = PANE_TREE.leaves(payload.paneRoot).filter((leafNode) => leafNode.actor.windowId !== null);
   if (!bound.length) {
-    setStatus("Pick a pane in at least one view before saving a profile.", "warning");
+    setStatus("Pick a pane in at least one view before saving a layout.", "warning");
     return null;
   }
-  const data = await apiFetch("/api/profiles", {
+  if (state.layouts.some((item) => item.name.toLowerCase() === name.toLowerCase())) {
+    setStatus(`A layout named “${name}” already exists.`, "warning");
+    return null;
+  }
+  const data = await apiFetch("/api/layouts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ profile: { id: id || undefined, name, ...layout } })
+    body: JSON.stringify({ layout: { name, ...payload } })
   });
-  if (!state.activeProfileId) {
-    // Saved from the Session layout: that layout stays available as "Session".
-    state.sessionLayout = JSON.parse(JSON.stringify(layout));
+  if (!state.activeLayoutId) {
+    state.scratchLayout = JSON.parse(JSON.stringify(payload));
   }
-  state.activeProfileId = data.profile.id;
-  state.activeProfileRoot = JSON.stringify(state.paneRoot);
-  await loadProfiles();
-  setStatus(`Saved profile “${data.profile.name}”.`, "success");
-  return data.profile;
+  state.activeLayoutId = data.layout.id;
+  state.activeLayoutSaved = JSON.stringify(payload);
+  savePaneLayout();
+  await loadLayouts();
+  setStatus(`Saved layout “${data.layout.name}”.`, "success");
+  return data.layout;
 }
 
-async function applyProfile(profileId) {
-  const profile = state.profiles.find((item) => item.id === profileId);
-  if (!profile) {
+async function applyLayout(layoutId) {
+  const layout = state.layouts.find((item) => item.id === layoutId);
+  const payload = layout ? decodeLayoutPayload(layout) : null;
+  if (!payload) {
     return;
   }
-  const layout = PANE_TREE.decodePersistedPaneLayout({ paneVersion: 1, paneRoot: profile.paneRoot, activePaneId: profile.activePaneId });
-  if (!state.activeProfileId) {
-    state.sessionLayout = sessionLayoutSnapshot();
+  if (!state.activeLayoutId) {
+    state.scratchLayout = layoutSnapshot();
   }
-  state.paneRoot = layout.paneRoot;
-  state.activePaneId = layout.activePaneId;
-  state.activeProfileId = profile.id;
-  state.activeProfileRoot = JSON.stringify(state.paneRoot);
-  savePaneLayout();
-  renderProfiles();
-  renderPaneTree();
-  await bindSelectionToActor(activeLeaf().actor);
+  state.activeLayoutId = layout.id;
+  state.activeLayoutSaved = JSON.stringify(payload);
+  await applyLayoutPayload(payload);
+  state.activeLayoutSaved = JSON.stringify(layoutSnapshot());
+  renderLayouts();
   if (isMobileViewport()) {
     setMobileScreen("chat");
   }
-  setStatus(`Loaded profile “${profile.name}”.`, "success");
+  setStatus(`Switched to layout “${layout.name}”.`, "success");
 }
 
-async function deleteProfile(profileId) {
-  const profile = state.profiles.find((item) => item.id === profileId);
-  if (!profile || !window.confirm(`Delete profile “${profile.name}”?`)) {
+async function duplicateLayout(layoutId) {
+  const layout = state.layouts.find((item) => item.id === layoutId);
+  const payload = layout ? decodeLayoutPayload(layout) : null;
+  if (!payload) {
     return;
   }
-  await apiFetch("/api/profiles/delete", {
+  const data = await apiFetch("/api/layouts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: profileId })
+    body: JSON.stringify({ layout: { name: `${layout.name} copy`, ...payload } })
   });
-  if (state.activeProfileId === profileId) {
-    // The current tree carries on as the Session layout.
-    state.activeProfileId = null;
-    state.activeProfileRoot = "";
-    state.sessionLayout = null;
-    savePaneLayout();
-  }
-  await loadProfiles();
-  setStatus(`Deleted profile “${profile.name}”.`, "neutral");
+  await loadLayouts();
+  setStatus(`Duplicated as “${data.layout.name}”.`, "success");
 }
 
-// The "Save profile" button opens the Profiles view with the name field ready.
-function openProfileSaveForm() {
+async function deleteLayout(layoutId) {
+  const layout = state.layouts.find((item) => item.id === layoutId);
+  if (!layout || !window.confirm(`Delete layout “${layout.name}”?`)) {
+    return;
+  }
+  await apiFetch("/api/layouts/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: layoutId })
+  });
+  if (state.activeLayoutId === layoutId) {
+    // The current tree carries on as Scratch.
+    state.activeLayoutId = null;
+    state.activeLayoutSaved = "";
+    state.scratchLayout = null;
+    savePaneLayout();
+  }
+  await loadLayouts();
+  setStatus(`Deleted layout “${layout.name}”.`, "neutral");
+}
+
+// The "Save layout" button opens the Layouts view with the name field ready.
+function openLayoutSaveForm() {
   if (isMobileViewport()) {
-    setMobileScreen("profiles");
+    setMobileScreen("layouts");
   } else {
-    state.activeSidebarView = "profiles";
+    state.activeSidebarView = "layouts";
     state.sidebarVisible = true;
     applyUiState();
   }
-  const active = state.profiles.find((item) => item.id === state.activeProfileId);
-  elements.profileNameInput.value = active ? active.name : "";
-  elements.profileNameInput.focus();
-  elements.profileNameInput.select();
+  const active = state.layouts.find((item) => item.id === state.activeLayoutId);
+  elements.layoutNameInput.value = active ? `${active.name} copy` : "";
+  elements.layoutNameInput.focus();
+  elements.layoutNameInput.select();
 }
 
 function ensurePaneTree() {
@@ -2611,9 +2950,14 @@ function bindOutputElement(output) {
   output.__bound = true;
   const whenActive = (handler) => (event) => (output === activeOutput ? handler(event) : undefined);
   output.addEventListener("click", whenActive(handleScreenPaneClick));
-  output.addEventListener("wheel", whenActive(queueRemoteScrollFromWheel), { passive: false });
+  // Passive as well: Screen mode forwards wheel steps at the edges without
+  // needing preventDefault (overscroll-behavior already stops chaining).
+  output.addEventListener("wheel", whenActive(queueRemoteScrollFromWheel), { passive: true });
   output.addEventListener("touchstart", whenActive(handleScreenTouchStart), { passive: true });
-  output.addEventListener("touchmove", whenActive(handleScreenTouchMove), { passive: false });
+  // Passive on purpose: a blocking touchmove listener makes iOS scroll the
+  // whole transcript on the main thread. Screen mode disables native vertical
+  // panning with CSS touch-action instead and moves the pane itself.
+  output.addEventListener("touchmove", whenActive(handleScreenTouchMove), { passive: true });
   output.addEventListener("touchend", whenActive(handleScreenTouchEnd), { passive: true });
   output.addEventListener("touchcancel", whenActive(handleScreenTouchEnd), { passive: true });
   output.addEventListener("scroll", whenActive(handleScreenOutputScroll), { passive: true });
@@ -3448,14 +3792,10 @@ function renderViewerMeta() {
 }
 
 function closePreview() {
-  if (isMobileViewport() && state.previewVisible && getMobileHistoryScreen() === "browser") {
-    history.back();
-    return;
-  }
-
   state.previewVisible = false;
   if (isMobileViewport() && state.mobileScreen === "browser") {
-    state.mobileScreen = "chat";
+    handleMobileBack();
+    return;
   }
   applyUiState();
   refreshPaneAfterMobileReturn();
@@ -3538,7 +3878,9 @@ async function jumpPreviewHistory(index) {
 }
 
 async function loadUrlPreview(rawUrl, options = {}) {
-  const target = getSelectedTarget();
+  const target = options.targetId
+    ? state.targets.find((item) => item.id === options.targetId) || null
+    : getSelectedTarget();
 
   if (!target) {
     setPreviewStatus("Choose a connection target first.", "warning");
@@ -3547,11 +3889,15 @@ async function loadUrlPreview(rawUrl, options = {}) {
 
   const url = normalizeBrowserUrl(rawUrl);
 
+  state.previewTargetId = target.id;
   rememberPreviewUrl(url, options.history || "push");
   state.previewVisible = true;
   await refreshPreviewAccessToken();
   syncPreviewFrame();
-  if (isMobileViewport() && state.mobileScreen === "chat") {
+  renderReports();
+  // On a phone the Browser is its own screen, reached from the terminal or
+  // from the Reports list.
+  if (isMobileViewport() && state.mobileScreen !== "browser") {
     setMobileScreen("browser");
     setPreviewStatus(`Opening ${url} through ${target.name}...`, "neutral");
     return;
@@ -3568,14 +3914,17 @@ function maybeCloseUnpinnedBrowser(event) {
   const path = event.composedPath ? event.composedPath() : [];
   if (
     path.includes(elements.previewDrawer) ||
-    path.includes(elements.reopenPreviewBtn)
+    path.includes(elements.browserSidebarView) ||
+    path.includes(elements.showBrowserViewBtn)
   ) {
+    // The Browser view (reports, address field) belongs to the Browser.
     return;
   }
 
   state.previewVisible = false;
   if (isMobileViewport() && state.mobileScreen === "browser") {
-    state.mobileScreen = "chat";
+    handleMobileBack();
+    return;
   }
   applyUiState();
   refreshPaneAfterMobileReturn();
@@ -3591,12 +3940,12 @@ function handleBrowserMessage(event) {
     return;
   }
 
-  if (message.targetId && message.targetId !== state.selectedTargetId) {
+  if (message.targetId && message.targetId !== state.previewTargetId) {
     return;
   }
 
   if (message.type === "browser:navigate") {
-    loadUrlPreview(message.url).catch((error) => setPreviewStatus(error.message, "danger"));
+    loadUrlPreview(message.url, { targetId: state.previewTargetId }).catch((error) => setPreviewStatus(error.message, "danger"));
     return;
   }
 
@@ -3606,10 +3955,130 @@ function handleBrowserMessage(event) {
       replaceLoadedPreviewUrl(url);
       setPreviewStatus(`Loaded ${url}`, "neutral");
       applyUiState();
+      recordReport(url, message.title).catch(() => {});
     } catch (error) {
       setPreviewStatus(error.message, "danger");
     }
+    return;
   }
+
+  if (message.type === "browser:title" && message.title) {
+    try {
+      recordReport(normalizeBrowserUrl(message.url), message.title).catch(() => {});
+    } catch (error) {
+      // Not a listable URL.
+    }
+  }
+}
+
+// Reports: the Browser's own list, kept on the server like layouts.
+const reportTitles = new Map();
+
+async function loadReports() {
+  try {
+    const data = await apiFetch("/api/reports");
+    state.reports = Array.isArray(data.reports) ? data.reports : [];
+  } catch (error) {
+    state.reports = [];
+    elements.reportSummary.textContent = `Reports unavailable: ${error.message}`;
+  }
+  renderReports();
+}
+
+async function recordReport(url, title = "") {
+  const targetId = state.previewTargetId || state.selectedTargetId;
+  if (!targetId || !url) {
+    return;
+  }
+  const key = `${targetId} ${url}`;
+  const cleanTitle = String(title || "").trim();
+  if (cleanTitle && reportTitles.get(key) === cleanTitle) {
+    return;
+  }
+  if (cleanTitle) {
+    reportTitles.set(key, cleanTitle);
+  }
+  await apiFetch("/api/reports", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targetId, url, title: cleanTitle })
+  });
+  await loadReports();
+}
+
+function describeReport(report) {
+  const target = state.targets.find((item) => item.id === report.targetId);
+  return `${target ? target.name : report.targetId} · ${report.url}`;
+}
+
+function reportLabel(report) {
+  if (report.title) {
+    return report.title;
+  }
+  try {
+    const parsed = new URL(report.url);
+    const last = parsed.pathname.split("/").filter(Boolean).pop();
+    return last ? decodeURIComponent(last) + (parsed.pathname.endsWith("/") ? "/" : "") : parsed.host || report.url;
+  } catch (error) {
+    return report.url;
+  }
+}
+
+function renderReports() {
+  if (!elements.reportList) {
+    return;
+  }
+  if (!state.reports.length) {
+    elements.reportList.innerHTML = `<p class="empty-note">Nothing opened yet. Click a link in the terminal or enter a path above.</p>`;
+    return;
+  }
+  elements.reportList.innerHTML = state.reports
+    .map((report) => {
+      const active = report.url === state.previewUrl && report.targetId === state.previewTargetId ? "active" : "";
+      return `
+        <div class="layout-row report-row ${active}" data-report-id="${escapeHtml(report.id)}">
+          <button class="layout-row-main" type="button" data-report-action="open" title="${escapeHtml(report.url)}">
+            <strong>${escapeHtml(reportLabel(report))}</strong>
+            <small>${escapeHtml(describeReport(report))}</small>
+          </button>
+          <div class="layout-row-actions">
+            <button class="icon-button ${report.pinned ? "active" : ""}" type="button" data-report-action="pin" aria-label="${report.pinned ? "Unpin" : "Pin"}" title="${report.pinned ? "Unpin" : "Pin to the top"}">${report.pinned ? "★" : "☆"}</button>
+            <button class="icon-button" type="button" data-report-action="delete" aria-label="Remove from the list" title="Remove from the list">×</button>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+async function openReport(reportId) {
+  const report = state.reports.find((item) => item.id === reportId);
+  if (!report) {
+    return;
+  }
+  await loadUrlPreview(report.url, { history: "reset", targetId: report.targetId });
+}
+
+async function toggleReportPin(reportId) {
+  const report = state.reports.find((item) => item.id === reportId);
+  if (!report) {
+    return;
+  }
+  await apiFetch("/api/reports/update", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: reportId, pinned: !report.pinned })
+  });
+  await loadReports();
+}
+
+async function deleteReport(reportId) {
+  await apiFetch("/api/reports/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: reportId })
+  });
+  await loadReports();
 }
 
 function clearSessionSelection() {
@@ -3623,6 +4092,7 @@ function clearSessionSelection() {
   state.imageAttachment = null;
   if (isMobileViewport()) {
     state.mobileScreen = "connect";
+    resetMobileStack("connect");
     state.activeSidebarView = "ssh";
     state.sidebarVisible = true;
   }
@@ -3952,7 +4422,6 @@ function queueRemoteScrollFromWheel(event) {
     return;
   }
 
-  event.preventDefault();
   event.stopImmediatePropagation();
 
   queueRemoteScrollLines(wheelDeltaToLines(event));
@@ -3979,11 +4448,12 @@ function handleScreenTouchMove(event) {
   screenTouchScroll.lastY = nextY;
 
   if (!shouldForwardScrollDeltaToKitty(deltaY)) {
+    // Native panning is off in Screen mode (touch-action), so scroll the
+    // wrapped viewport text locally until an edge is reached.
+    event.currentTarget.scrollTop += deltaY;
     return;
   }
 
-  event.preventDefault();
-  event.stopImmediatePropagation();
   queueRemoteScrollLines((deltaY / TOUCH_SCROLL_LINE_PX) * TOUCH_SCROLL_SENSITIVITY);
 }
 
@@ -4271,8 +4741,8 @@ async function setScreenExtent(extent) {
   await refreshScreen({ force: true, scrollToBottom: true });
   setStatus(
     nextExtent === "all"
-      ? "Switched to All: showing screen + scrollback; wheel scrolls in the browser."
-      : "Switched to Screen: wheel scrolls locally until the top or bottom edge.",
+      ? "Transcript: this pane's text and scrollback, scrolled in the browser."
+      : "Screen: the live window; swipes and the wheel scroll the pane itself.",
     "neutral"
   );
 }
@@ -4675,8 +5145,10 @@ function setSidebarView(view) {
   applyUiState();
 }
 
+// The Browser edge is always draggable on desktop; the sidebar and bottom
+// panel handles follow the layout lock.
 function startResize(kind, event) {
-  if (!state.resizeEnabled) {
+  if (kind !== "browser" && !state.resizeEnabled) {
     return;
   }
 
@@ -4690,8 +5162,15 @@ function startResize(kind, event) {
     bottomPanelHeight: state.bottomPanelHeight
   };
   elements.appShell.classList.add("resizing");
+  // Capture keeps pointermove flowing while the pointer crosses the Browser iframe.
+  try {
+    event.currentTarget.setPointerCapture(event.pointerId);
+  } catch (error) {
+    // Older browsers without pointer capture still get window-level moves.
+  }
   window.addEventListener("pointermove", handleResizeMove);
   window.addEventListener("pointerup", stopResize, { once: true });
+  window.addEventListener("pointercancel", stopResize, { once: true });
 }
 
 function handleResizeMove(event) {
@@ -4714,6 +5193,8 @@ function handleResizeMove(event) {
       PANEL_HEIGHT_RANGE.min,
       PANEL_HEIGHT_RANGE.max
     );
+    state.bottomPanelPinned = true;
+    autosizeComposer();
   }
 
   if (resizeSession.kind === "browser") {
@@ -4738,6 +5219,8 @@ function stopResize() {
   resizeSession = null;
   elements.appShell.classList.remove("resizing");
   window.removeEventListener("pointermove", handleResizeMove);
+  window.removeEventListener("pointerup", stopResize);
+  window.removeEventListener("pointercancel", stopResize);
   saveUiPreferences();
 }
 
@@ -4796,82 +5279,126 @@ function attachEvents() {
     setSidebarView("ssh");
   });
 
-  elements.showSessionsViewBtn.addEventListener("click", async () => {
-    // The Session Explorer always shows the reserved Session layout.
-    if (await activateSessionLayout().catch((error) => (setStatus(error.message, "danger"), false))) {
-      state.activeSidebarView = "sessions";
-      state.sidebarVisible = true;
-      applyUiState();
-      return;
-    }
+  elements.showSessionsViewBtn.addEventListener("click", () => {
     setSidebarView("sessions");
   });
 
-  elements.showProfilesViewBtn.addEventListener("click", () => {
-    setSidebarView("profiles");
+  elements.showLayoutsViewBtn.addEventListener("click", () => {
+    setSidebarView("layouts");
   });
 
-  elements.saveProfileBtn.addEventListener("click", () => {
-    openProfileSaveForm();
-  });
-
-  elements.mobileProfilesBtn.addEventListener("click", () => {
-    setMobileScreen("profiles");
-  });
-
-  elements.mobileBackFromProfilesBtn.addEventListener("click", () => {
-    // Back to the explorer when a target is connected, otherwise to Connect.
-    if (state.flatWindows.length) {
-      activateSessionLayout().catch((error) => setStatus(error.message, "danger"));
+  elements.showBrowserViewBtn.addEventListener("click", () => {
+    setSidebarView("browser");
+    if (state.sidebarVisible && state.previewUrl && !state.previewVisible) {
+      reopenPreview().catch((error) => setPreviewStatus(error.message, "danger"));
     }
+  });
+
+  elements.mobileBrowserListBtn.addEventListener("click", () => {
+    setMobileScreen("reports");
+  });
+
+  elements.mobileReportsBtn.addEventListener("click", () => {
+    setMobileScreen("reports");
+  });
+
+  elements.mobileBackFromBrowserListBtn.addEventListener("click", () => {
     handleMobileBack(state.flatWindows.length ? "sessions" : "connect");
   });
 
-  elements.reloadProfilesBtn.addEventListener("click", async () => {
-    await loadProfiles();
-    setStatus("Profiles reloaded.", "neutral");
+  elements.reloadReportsBtn.addEventListener("click", async () => {
+    await loadReports();
+    setStatus("Reports reloaded.", "neutral");
   });
 
-  elements.profileSaveForm.addEventListener("submit", async (event) => {
+  elements.reportOpenForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const name = elements.profileNameInput.value.trim();
-    if (!name) {
-      elements.profileNameInput.focus();
+    const value = elements.reportUrlInput.value.trim();
+    if (!value) {
+      elements.reportUrlInput.focus();
       return;
     }
     try {
-      // Saving under an existing name replaces that profile.
-      const existing = state.profiles.find((item) => item.name.toLowerCase() === name.toLowerCase());
-      const profile = await saveProfile(name, existing ? existing.id : null);
-      if (profile) {
-        elements.profileNameInput.value = "";
+      await loadUrlPreview(value, { history: "reset" });
+      elements.reportUrlInput.value = "";
+    } catch (error) {
+      setPreviewStatus(error.message, "danger");
+    }
+  });
+
+  elements.reportList.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-report-action]");
+    const row = event.target.closest("[data-report-id]");
+    if (!button || !row) {
+      return;
+    }
+    const reportId = row.dataset.reportId;
+    try {
+      if (button.dataset.reportAction === "open") {
+        await openReport(reportId);
+      } else if (button.dataset.reportAction === "pin") {
+        await toggleReportPin(reportId);
+      } else if (button.dataset.reportAction === "delete") {
+        await deleteReport(reportId);
       }
     } catch (error) {
       setStatus(error.message, "danger");
     }
   });
 
-  elements.profileList.addEventListener("click", async (event) => {
-    const button = event.target.closest("[data-profile-action]");
-    const row = event.target.closest("[data-profile-id]");
+  elements.saveLayoutBtn.addEventListener("click", () => {
+    openLayoutSaveForm();
+  });
+
+  elements.mobileLayoutsBtn.addEventListener("click", () => {
+    setMobileScreen("layouts");
+  });
+
+  elements.mobileBackFromLayoutsBtn.addEventListener("click", () => {
+    // Back to the explorer when a target is connected, otherwise to Connect.
+    handleMobileBack(state.flatWindows.length ? "sessions" : "connect");
+  });
+
+  elements.reloadLayoutsBtn.addEventListener("click", async () => {
+    await loadLayouts({ adoptActive: true });
+    setStatus("Layouts reloaded.", "neutral");
+  });
+
+  elements.layoutSaveForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const name = elements.layoutNameInput.value.trim();
+    if (!name) {
+      elements.layoutNameInput.focus();
+      return;
+    }
+    try {
+      const layout = await saveLayoutAs(name);
+      if (layout) {
+        elements.layoutNameInput.value = "";
+      }
+    } catch (error) {
+      setStatus(error.message, "danger");
+    }
+  });
+
+  elements.layoutList.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-layout-action]");
+    const row = event.target.closest("[data-layout-id]");
     if (!button || !row) {
       return;
     }
-    const profileId = row.dataset.profileId;
+    const layoutId = row.dataset.layoutId;
     try {
-      if (profileId === SESSION_PROFILE_ID) {
-        if (button.dataset.profileAction === "load") {
-          await activateSessionLayout();
+      if (layoutId === SCRATCH_LAYOUT_ID) {
+        if (button.dataset.layoutAction === "load") {
+          await activateScratchLayout();
         }
-      } else if (button.dataset.profileAction === "load") {
-        await applyProfile(profileId);
-      } else if (button.dataset.profileAction === "overwrite") {
-        const profile = state.profiles.find((item) => item.id === profileId);
-        if (profile && window.confirm(`Overwrite profile “${profile.name}” with the current layout?`)) {
-          await saveProfile(profile.name, profileId);
-        }
-      } else if (button.dataset.profileAction === "delete") {
-        await deleteProfile(profileId);
+      } else if (button.dataset.layoutAction === "load") {
+        await applyLayout(layoutId);
+      } else if (button.dataset.layoutAction === "duplicate") {
+        await duplicateLayout(layoutId);
+      } else if (button.dataset.layoutAction === "delete") {
+        await deleteLayout(layoutId);
       }
     } catch (error) {
       setStatus(error.message, "danger");
@@ -4883,7 +5410,6 @@ function attachEvents() {
   });
 
   elements.mobileBackToSessionsBtn.addEventListener("click", () => {
-    activateSessionLayout().catch((error) => setStatus(error.message, "danger"));
     handleMobileBack("sessions");
   });
 
@@ -4922,20 +5448,9 @@ function attachEvents() {
     applyUiState();
   });
 
-  elements.resizeToggle.addEventListener("change", () => {
-    state.resizeEnabled = elements.resizeToggle.checked;
+  elements.resizeToggle.addEventListener("click", () => {
+    state.resizeEnabled = !state.resizeEnabled;
     applyUiState();
-  });
-
-  elements.refreshTextBtn.addEventListener("click", async () => {
-    try {
-      if (activeExtent() === "all") {
-        state.allTextFollowTail = true;
-      }
-      await refreshScreen({ force: true, scrollToBottom: activeExtent() === "all" });
-    } catch (error) {
-      setStatus(error.message, "danger");
-    }
   });
 
   elements.latestOutputBtn.addEventListener("click", () => {
@@ -5035,6 +5550,10 @@ function attachEvents() {
 
   elements.sidebarResizeHandle.addEventListener("pointerdown", (event) => startResize("sidebar", event));
   elements.panelResizeHandle.addEventListener("pointerdown", (event) => startResize("panel", event));
+  elements.panelResizeHandle.addEventListener("dblclick", () => {
+    state.bottomPanelPinned = false;
+    applyUiState();
+  });
   elements.browserResizeHandle.addEventListener("pointerdown", (event) => startResize("browser", event));
   elements.sessionTree.addEventListener("click", (event) => {
     handleSessionCloseClick(event).catch((error) => setStatus(error.message, "danger"));
@@ -5056,10 +5575,8 @@ function attachEvents() {
 
   elements.closePreviewBtn.addEventListener("click", closePreview);
   elements.mobileBrowserBackBtn.addEventListener("click", closePreview);
-  elements.reopenPreviewBtn.addEventListener("click", () => {
-    reopenPreview().catch((error) => setPreviewStatus(error.message, "danger"));
-  });
   elements.pinBrowserBtn.addEventListener("click", toggleBrowserPin);
+  attachBrowserHandle();
   elements.browserBackBtn.addEventListener("click", () => {
     goBackPreview().catch((error) => setPreviewStatus(error.message, "danger"));
   });
@@ -5285,26 +5802,15 @@ function attachEvents() {
     }
   });
 
+  // Toolbar splits act on the highlighted view; each view's header has its own.
   elements.splitRightBtn.addEventListener("click", () => {
-    closeEditorMenu();
     splitActivePane("horizontal").catch((error) => setStatus(error.message, "danger"));
   });
   elements.splitDownBtn.addEventListener("click", () => {
-    closeEditorMenu();
     splitActivePane("vertical").catch((error) => setStatus(error.message, "danger"));
-  });
-  elements.closeViewBtn.addEventListener("click", () => {
-    closeEditorMenu();
-    closeViewPane(state.activePaneId).catch((error) => setStatus(error.message, "danger"));
   });
   elements.paneTree.addEventListener("click", handlePaneTreeClick);
   elements.paneTree.addEventListener("pointerdown", handleDividerPointerDown);
-
-  elements.autoRefreshToggle.addEventListener("change", () => {
-    state.autoRefresh = elements.autoRefreshToggle.checked;
-    applyUiState();
-    restartPolling();
-  });
 
   window.addEventListener("resize", () => {
     document.documentElement.style.setProperty("--sidebar-width", `${getEffectiveSidebarWidth()}px`);
@@ -5326,8 +5832,10 @@ function attachEvents() {
 async function bootAuthenticatedWorkspace() {
   await loadTargets();
   renderPaneTree();
-  loadProfiles();
+  loadLayouts({ adoptActive: true }).catch((error) => setStatus(error.message, "danger"));
+  loadReports();
   state.mobileScreen = "connect";
+  resetMobileStack("connect");
   if (isMobileViewport()) {
     state.activeSidebarView = "ssh";
     state.sidebarVisible = true;
@@ -5349,7 +5857,7 @@ async function init() {
   initializeClientDebug();
   loadUiPreferences();
   applyUiState();
-  syncMobileHistory(state.mobileScreen, "replace");
+  resetMobileStack(state.mobileScreen);
   renderSpecialKeyMenu();
   attachEvents();
   attachWheelContainment();

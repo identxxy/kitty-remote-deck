@@ -1,8 +1,8 @@
 {
-  "name": "kitty-remote-deck",
-  "version": "0.2.1",
+  "name": "terminal-dock",
+  "version": "0.2.2",
   "private": true,
-  "description": "A local web front-end for browsing and controlling local or SSH kitty GUI sessions.",
+  "description": "Browser remote control for kitty and tmux terminals, local or over SSH.",
   "scripts": {
     "start": "node server.js",
     "test": "node --test",

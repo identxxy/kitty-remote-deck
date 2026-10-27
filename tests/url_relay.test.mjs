@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -49,6 +49,27 @@ test("remote helper fetches a file URL as HTML preview content", async () => {
     assert.equal(result.data.contentType, "text/html");
     assert.equal(result.data.body, html);
     assert.equal(result.data.truncated, false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("remote helper renders a directory as an HTML listing", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "krd-url-dir-"));
+  await writeFile(path.join(dir, "report.html"), "<p>x</p>", "utf8");
+  await writeFile(path.join(dir, "my notes.md"), "# hi", "utf8");
+  await mkdir(path.join(dir, "assets"));
+
+  try {
+    const result = await runHelper("fetch_url", { url: `file://${dir}` });
+    assert.equal(result.ok, true);
+    assert.match(result.data.contentType, /^text\/html/);
+    const body = result.data.body;
+    // Folders first, then files; links are absolute file URLs the proxy rewrites.
+    assert.ok(body.indexOf("assets/") < body.indexOf("my notes.md"));
+    assert.match(body, new RegExp(`href="file://${dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/assets/"`));
+    assert.match(body, /href="file:\/\/[^"]*\/my%20notes\.md"/);
+    assert.match(body, /href="file:\/\/[^"]*\/report\.html"/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

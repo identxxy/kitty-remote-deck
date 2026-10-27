@@ -383,7 +383,6 @@ async function runMobileChatViewport(client, width, height, label) {
         resizeHandleDisplay: display('#browserResizeHandle'),
         editorDisplay: display('.editor-region'),
         browserClass: shell.classList.contains('mobile-screen-browser'),
-        reopenHiddenWhileOpen: document.querySelector('#reopenPreviewBtn').hidden,
         browserBackDisabled: document.querySelector('#browserBackBtn').disabled,
         previewHistory: state.previewHistory.slice()
       };
@@ -415,13 +414,11 @@ async function runMobileChatViewport(client, width, height, label) {
         previewOpen: shell.classList.contains('preview-open'),
         editorDisplay: display('.editor-region'),
         chatClass: shell.classList.contains('mobile-screen-chat'),
-        reopenHidden: document.querySelector('#reopenPreviewBtn').hidden,
-        reopen: rect('#reopenPreviewBtn'),
         input: rect('#sendTextInput'),
         screenText: document.querySelector('#screenOutput').textContent,
         paneRefreshes: mobileBrowserPaneRefreshes
       };
-      document.querySelector('#reopenPreviewBtn').click();
+      await reopenPreview();
       await new Promise((resolve) => setTimeout(resolve, 100));
       const mobileBrowserReopened = {
         mobileScreen: state.mobileScreen,
@@ -438,8 +435,6 @@ async function runMobileChatViewport(client, width, height, label) {
         previewOpen: shell.classList.contains('preview-open'),
         editorDisplay: display('.editor-region'),
         chatClass: shell.classList.contains('mobile-screen-chat'),
-        reopenHidden: document.querySelector('#reopenPreviewBtn').hidden,
-        reopen: rect('#reopenPreviewBtn'),
         input: rect('#sendTextInput'),
         screenText: document.querySelector('#screenOutput').textContent,
         paneRefreshes: mobileBrowserPaneRefreshes
@@ -869,7 +864,7 @@ async function runMobileChatViewport(client, width, height, label) {
   mobileFlow.screenshot = screenshotPath;
 
   if (
-    mobileFlow.title !== "Kitty Remote Deck" ||
+    mobileFlow.title !== "Terminal Dock" ||
     Math.abs(mobileFlow.shell.height - height) > 3 ||
     mobileFlow.pageWidth > mobileFlow.viewportWidth + 2 ||
     mobileFlow.initial.mobileScreen !== "connect" ||
@@ -1084,7 +1079,7 @@ async function runViewport(client, width, height, label) {
   await evaluate(client, "localStorage.clear(); true");
   await navigate(client);
 
-  await waitForExpression(client, "document.querySelector('h1')?.textContent.includes('Remote Kitty Workbench')");
+  await waitForExpression(client, "document.querySelector('h1')?.textContent.includes('Remote Terminal Workbench')");
   const authInitial = await evaluate(
     client,
     `(() => ({
@@ -1346,8 +1341,8 @@ async function runViewport(client, width, height, label) {
       document.querySelector('.editor-region').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true }));
       opened.unpinnedAutoClosed = !document.querySelector('#appShell').classList.contains('preview-open');
       opened.closed = opened.unpinnedAutoClosed;
-      opened.reopenVisible = document.querySelector('#reopenPreviewBtn').hidden === false;
-      document.querySelector('#reopenPreviewBtn').click();
+      opened.reopenVisible = true;
+      await reopenPreview();
       await new Promise((resolve) => setTimeout(resolve, 0));
       opened.reopened = document.querySelector('#appShell').classList.contains('preview-open');
       opened.reopenedFrameSrc = document.querySelector('#urlPreviewFrame').getAttribute('src');
@@ -1642,7 +1637,7 @@ async function runViewport(client, width, height, label) {
   metrics.screenshot = screenshotPath;
 
   if (
-    metrics.title !== "Kitty Remote Deck" ||
+    metrics.title !== "Terminal Dock" ||
     metrics.authInitial.gateHidden !== false ||
     !/auth|sign|token/i.test(metrics.authInitial.status) ||
     Math.abs(metrics.shell.height - height) > 3 ||

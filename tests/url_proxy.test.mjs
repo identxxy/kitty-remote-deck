@@ -6,8 +6,10 @@ import proxy from "../server/url_proxy.js";
 const {
   createProxyUrl,
   ensureAnonymousCrossoriginForProxyResources,
+  parseProxyPath,
   rewriteCssResources,
-  rewriteHtmlResources
+  rewriteHtmlResources,
+  shouldProxyUrl
 } = proxy;
 
 test("HTML resources are rewritten to same-origin proxy URLs", () => {
@@ -47,20 +49,65 @@ test("proxy URLs preserve target and absolute resource URL", () => {
   );
 });
 
-test("proxy URLs can carry scoped preview access tokens", () => {
+test("proxy URLs with an access token take the path form, so relative references resolve in the browser", () => {
   assert.equal(
     createProxyUrl("file:///tmp/report/movie.mp4", "local", "token.abc"),
-    "/api/url-resource?targetId=local&url=file%3A%2F%2F%2Ftmp%2Freport%2Fmovie.mp4&access=token.abc"
+    "/p/local/token.abc/file/-/tmp/report/movie.mp4"
   );
+  assert.equal(
+    createProxyUrl("https://host.lan:8443/a/b?x=1", "t", "tok"),
+    "/p/t/tok/https/host.lan:8443/a/b?x=1"
+  );
+  assert.deepEqual(parseProxyPath("/p/local/token.abc/file/-/tmp/my%20report/index.html", ""), {
+    targetId: "local",
+    accessToken: "token.abc",
+    url: "file:///tmp/my%20report/index.html"
+  });
+  assert.deepEqual(parseProxyPath("/p/t/tok/https/host.lan:8443/a/b", "?x=1"), {
+    targetId: "t",
+    accessToken: "tok",
+    url: "https://host.lan:8443/a/b?x=1"
+  });
+  assert.equal(parseProxyPath("/api/health", ""), null);
+  assert.equal(parseProxyPath("/p/t/tok/ftp/host/x", ""), null);
 
   const rewritten = rewriteHtmlResources(
-    '<video src="movie.mp4"></video>',
+    '<video src="movie.mp4"></video><object data="d.svg"></object>',
     "file:///tmp/report/index.html",
     "local",
     { accessToken: "token.abc" }
   );
 
-  assert.match(rewritten, /access=token\.abc/);
+  assert.match(rewritten, /src="\/p\/local\/token\.abc\/file\/-\/tmp\/report\/movie\.mp4"/);
+  assert.match(rewritten, /data="\/p\/local\/token\.abc\/file\/-\/tmp\/report\/d\.svg"/);
+});
+
+test("public http(s) hosts load directly, private hosts and the document's own host go through the target", () => {
+  assert.equal(shouldProxyUrl("https://cdn.jsdelivr.net/npm/x.js", "file:///tmp/r/index.html"), false);
+  assert.equal(shouldProxyUrl("http://localhost:8080/data.json", "file:///tmp/r/index.html"), true);
+  assert.equal(shouldProxyUrl("http://gpu-node/x", "file:///tmp/r/index.html"), true);
+  assert.equal(shouldProxyUrl("http://100.88.88.1:3040/y", "file:///tmp/r/index.html"), true);
+  assert.equal(shouldProxyUrl("http://192.168.1.4/y", ""), true);
+  assert.equal(shouldProxyUrl("https://example.com/img.png", "https://example.com/page.html"), true);
+  assert.equal(shouldProxyUrl("https://example.com/img.png", "https://other.org/page.html"), false);
+  assert.equal(shouldProxyUrl("file:///tmp/x", ""), true);
+
+  const rewritten = rewriteHtmlResources(
+    '<script src="https://cdn.plot.ly/plotly.js"></script><img src="http://localhost:8080/plot.png">',
+    "file:///tmp/report/index.html",
+    "local",
+    { accessToken: "tok" }
+  );
+  assert.match(rewritten, /src="https:\/\/cdn\.plot\.ly\/plotly\.js"/);
+  assert.match(rewritten, /src="\/p\/local\/tok\/http\/localhost:8080\/plot\.png"/);
+});
+
+test("CSS @import strings are rewritten like url() references", () => {
+  const css = `@import "theme.css"; @import url(x.css); @import 'https://fonts.googleapis.com/css';`;
+  const rewritten = rewriteCssResources(css, "file:///tmp/r/s.css", "t", { accessToken: "tok" });
+  assert.match(rewritten, /@import "\/p\/t\/tok\/file\/-\/tmp\/r\/theme\.css"/);
+  assert.match(rewritten, /@import url\("\/p\/t\/tok\/file\/-\/tmp\/r\/x\.css"\)/);
+  assert.match(rewritten, /@import 'https:\/\/fonts\.googleapis\.com\/css'/);
 });
 
 test("HTML bridge script reports browser loads and intercepts in-frame navigation", () => {
@@ -70,7 +117,11 @@ test("HTML bridge script reports browser loads and intercepts in-frame navigatio
   assert.match(rewritten, /data-krd-browser-bridge/);
   assert.match(rewritten, /source: "kitty-remote-deck-browser"/);
   assert.match(rewritten, /type: type/);
-  assert.match(rewritten, /post\("browser:loaded", finalUrl\)/);
+  assert.match(rewritten, /postTitle\("browser:loaded"\)/);
+  // The bridge is injected at the top of <head> so fetch/XHR patches precede page scripts.
+  assert.match(rewritten, /window\.fetch = function/);
+  assert.match(rewritten, /XMLHttpRequest\.prototype\.open = function/);
+  assert.ok(rewritten.indexOf("data-krd-browser-bridge") < rewritten.indexOf("<a href"));
   assert.match(rewritten, /event\.preventDefault\(\)/);
   assert.match(rewritten, /https:\/\/example\.com\/report\/index\.html/);
 });

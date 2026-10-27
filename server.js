@@ -18,11 +18,13 @@ const {
   isCssContentType,
   isHtmlContentType,
   rewriteCssResources,
-  rewriteHtmlResources
+  rewriteHtmlResources,
+  parseProxyPath
 } = require("./server/url_proxy");
 const { createEtag, encodeBody, hashText, isFresh } = require("./server/response_encoding");
 const { WatcherRegistry, controlClientArgv } = require("./server/tmux_watcher");
-const { createProfileStore } = require("./server/profiles");
+const { createLayoutStore } = require("./server/layouts");
+const { createReportStore } = require("./server/reports");
 const { splitLines, computeLineDelta } = require("./public/modules/terminal-lines");
 const {
   MAX_IMAGE_BYTES,
@@ -36,8 +38,10 @@ const ROOT_DIR = __dirname;
 const DATA_DIR = path.join(ROOT_DIR, "data");
 const TMP_DIR = path.join(ROOT_DIR, "tmp");
 const TARGETS_FILE = path.join(DATA_DIR, "targets.json");
-const PROFILES_FILE = path.join(DATA_DIR, "profiles.json");
-const profileStore = createProfileStore(PROFILES_FILE);
+const LAYOUTS_FILE = path.join(DATA_DIR, "layouts.json");
+const REPORTS_FILE = path.join(DATA_DIR, "reports.json");
+const layoutStore = createLayoutStore(LAYOUTS_FILE);
+const reportStore = createReportStore(REPORTS_FILE);
 const AUTH_FILE = process.env.KRD_AUTH_FILE || path.join(DATA_DIR, "auth.json");
 const CLIENT_DEBUG_LOG_FILE = path.join(TMP_DIR, "client-debug.log");
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
@@ -99,7 +103,18 @@ const MIME_TYPES = {
   ".js": "application/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
-  ".svg": "image/svg+xml"
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".webmanifest": "application/manifest+json",
+  // Served through the Browser proxy for local files: module scripts and
+  // data files need their real types or the page refuses them.
+  ".mjs": "application/javascript; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".md": "text/markdown; charset=utf-8",
+  ".csv": "text/csv; charset=utf-8",
+  ".xml": "application/xml; charset=utf-8",
+  ".ico": "image/x-icon"
 };
 
 const RESOURCE_MIME_TYPES = {
@@ -107,7 +122,6 @@ const RESOURCE_MIME_TYPES = {
   ".apng": "image/apng",
   ".avif": "image/avif",
   ".gif": "image/gif",
-  ".ico": "image/x-icon",
   ".jpeg": "image/jpeg",
   ".jpg": "image/jpeg",
   ".m4v": "video/mp4",
@@ -708,16 +722,24 @@ function verifyPreviewAccessToken(accessToken, targetId, rawUrl) {
   }
 }
 
+// The proxied resource a request names, in either URL form.
+function proxiedResourceFromRequest(requestUrl) {
+  if (requestUrl.pathname === "/api/url-resource") {
+    return {
+      targetId: requestUrl.searchParams.get("targetId") || "",
+      url: requestUrl.searchParams.get("url") || "",
+      accessToken: requestUrl.searchParams.get("access") || ""
+    };
+  }
+  return parseProxyPath(requestUrl.pathname, requestUrl.search);
+}
+
 function hasPreviewResourceAccess(requestUrl) {
-  if (requestUrl.pathname !== "/api/url-resource") {
+  const resource = proxiedResourceFromRequest(requestUrl);
+  if (!resource) {
     return false;
   }
-
-  return verifyPreviewAccessToken(
-    requestUrl.searchParams.get("access") || "",
-    requestUrl.searchParams.get("targetId") || "",
-    requestUrl.searchParams.get("url") || ""
-  );
+  return verifyPreviewAccessToken(resource.accessToken, resource.targetId, resource.url);
 }
 
 function sendRangeNotSatisfiable(response, size, data) {
@@ -751,6 +773,11 @@ async function serveLocalFileResource(request, response, target, url, accessToke
   } catch (error) {
     sendText(response, 404, "File not found.");
     return true;
+  }
+
+  if (stat.isDirectory()) {
+    // The helper renders directory listings for every transport.
+    return false;
   }
 
   if (!stat.isFile()) {
@@ -986,22 +1013,46 @@ async function handleApi(request, response, requestUrl) {
       return;
     }
 
-    // Profiles: named view layouts shared by every device of this deck.
-    if (request.method === "GET" && requestUrl.pathname === "/api/profiles") {
-      sendJson(response, 200, { profiles: await profileStore.list() });
+    // Layouts: named view layouts shared by every device of this deck.
+    if (request.method === "GET" && requestUrl.pathname === "/api/reports") {
+      sendJson(response, 200, { reports: await reportStore.list() });
       return;
     }
 
-    if (request.method === "POST" && requestUrl.pathname === "/api/profiles") {
+    if (request.method === "POST" && requestUrl.pathname === "/api/reports") {
       const body = await parseRequestBody(request);
-      const profile = await profileStore.upsert(body.profile || body);
-      sendJson(response, 200, { profile });
+      sendJson(response, 200, { report: await reportStore.record(body) });
       return;
     }
 
-    if (request.method === "POST" && requestUrl.pathname === "/api/profiles/delete") {
+    if (request.method === "POST" && requestUrl.pathname === "/api/reports/update") {
       const body = await parseRequestBody(request);
-      await profileStore.remove(String(body.id || ""));
+      sendJson(response, 200, { report: await reportStore.update(String(body.id || ""), body) });
+      return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/api/reports/delete") {
+      const body = await parseRequestBody(request);
+      await reportStore.remove(String(body.id || ""));
+      sendJson(response, 200, { ok: true });
+      return;
+    }
+
+    if (request.method === "GET" && requestUrl.pathname === "/api/layouts") {
+      sendJson(response, 200, { layouts: await layoutStore.list() });
+      return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/api/layouts") {
+      const body = await parseRequestBody(request);
+      const layout = await layoutStore.upsert(body.layout || body);
+      sendJson(response, 200, { layout });
+      return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/api/layouts/delete") {
+      const body = await parseRequestBody(request);
+      await layoutStore.remove(String(body.id || ""));
       sendJson(response, 200, { ok: true });
       return;
     }
@@ -1032,10 +1083,8 @@ async function handleApi(request, response, requestUrl) {
       return;
     }
 
-    if (request.method === "GET" && requestUrl.pathname === "/api/url-resource") {
-      const targetId = requestUrl.searchParams.get("targetId") || "";
-      const url = requestUrl.searchParams.get("url") || "";
-      const accessToken = requestUrl.searchParams.get("access") || "";
+    if (request.method === "GET" && proxiedResourceFromRequest(requestUrl)) {
+      const { targetId, url, accessToken } = proxiedResourceFromRequest(requestUrl);
       const target = await resolveTargetFromRequest({ targetId });
       const servedLocalFile = await serveLocalFileResource(request, response, target, url, accessToken);
 
@@ -1353,7 +1402,8 @@ async function bootstrap() {
   const server = http.createServer(async (request, response) => {
     const requestUrl = new URL(request.url, `http://${request.headers.host}`);
 
-    if (requestUrl.pathname.startsWith("/api/")) {
+    // /p/ carries proxied Browser resources (see server/url_proxy.js).
+    if (requestUrl.pathname.startsWith("/api/") || requestUrl.pathname.startsWith("/p/")) {
       await handleApi(request, response, requestUrl);
       return;
     }
@@ -1362,7 +1412,7 @@ async function bootstrap() {
   });
 
   server.listen(PORT, HOST, () => {
-    console.log(`Kitty Remote Deck listening on http://${HOST}:${PORT}`);
+    console.log(`Terminal Dock listening on http://${HOST}:${PORT}`);
   });
 }
 
