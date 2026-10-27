@@ -7,7 +7,7 @@ This project is Terminal Dock, a local web app that drives GUI `kitty` sessions 
 Work from the repository root:
 
 ```text
-kitty-remote-deck
+terminal-dock
 ```
 
 ## Quick start
@@ -67,7 +67,7 @@ curl http://localhost:3040/api/health
 Sync to the remote playground directory with:
 
 ```bash
-rsync -av --exclude data --exclude tmp ./ user@example-host:/path/to/kitty-remote-deck/
+rsync -av --exclude data --exclude tmp ./ user@example-host:/path/to/terminal-dock/
 ```
 
 If you want saved local targets or logs copied too, remove the excludes deliberately.

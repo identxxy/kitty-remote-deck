@@ -29,11 +29,11 @@ test("ANSI renderer keeps terminal URLs clickable inside colored runs", () => {
 });
 
 test("ANSI renderer converts OSC 8 terminal hyperlinks to hidden-link anchors", () => {
-  const html = renderAnsiTerminalText("\x1b]8;;file:///home/vox/AGENTS.md\x1b\\AGENTS.md\x1b]8;;\x1b\\");
+  const html = renderAnsiTerminalText("\x1b]8;;file:///home/user/AGENTS.md\x1b\\AGENTS.md\x1b]8;;\x1b\\");
 
   assert.doesNotMatch(html, /\]8;;/);
   assert.match(html, /class="terminal-link"/);
-  assert.match(html, /data-preview-url="file:\/\/\/home\/vox\/AGENTS\.md"/);
+  assert.match(html, /data-preview-url="file:\/\/\/home\/user\/AGENTS\.md"/);
   assert.match(html, />AGENTS\.md<\/a>/);
 });
 

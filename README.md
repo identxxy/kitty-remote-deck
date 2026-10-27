@@ -5,7 +5,7 @@ A local web app that drives terminals from a browser: an iPad, a phone or anothe
 - `kitty`: the terminal is a GUI kitty window, so everything the browser does is also visible on that machine's physical display.
 - `tmux`: a headless tmux server, with nothing on any display. This is the backend for GPU servers and other machines without a GUI.
 
-Current release: `v0.3.0`. The repository and the launchd service on the author's machine still carry the pre-1.0 name `kitty-remote-deck`.
+Current release: `v1.0.0`. Repository: <https://github.com/identxxy/terminal-dock> (the old `kitty-remote-deck` URL redirects). Browser-storage keys, `KRD_*` environment variables and the `krd_` token prefix keep their pre-1.0 names so existing settings and device tokens carry over.
 
 ## What It Does
 
@@ -212,12 +212,12 @@ The project uses semantic versioning. The current release is recorded in:
 - `VERSION`
 - `CHANGELOG.md`
 
-Git release tags use the `vMAJOR.MINOR.PATCH` format, for example `v0.2.2`.
+Git release tags use the `vMAJOR.MINOR.PATCH` format, for example `v1.0.0`.
 
 ## Sync to a Remote Playground
 
 If you mirror this app to a remote development machine, keep local targets and logs out of the sync unless you deliberately need them:
 
 ```bash
-rsync -av --exclude data --exclude tmp ./ user@example-host:/path/to/kitty-remote-deck/
+rsync -av --exclude data --exclude tmp ./ user@example-host:/path/to/terminal-dock/
 ```

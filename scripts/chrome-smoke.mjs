@@ -1215,9 +1215,9 @@ async function runViewport(client, width, height, label) {
   const osc8RenderWorked = await evaluate(
     client,
     `(() => {
-      window.renderScreenText('doc \\x1b]8;;file:///home/vox/AGENTS.md\\x1b\\\\AGENTS.md\\x1b]8;;\\x1b\\\\ done');
+      window.renderScreenText('doc \\x1b]8;;file:///home/user/AGENTS.md\\x1b\\\\AGENTS.md\\x1b]8;;\\x1b\\\\ done');
       const output = document.querySelector('#screenOutput');
-      const link = output.querySelector('[data-preview-url="file:///home/vox/AGENTS.md"]');
+      const link = output.querySelector('[data-preview-url="file:///home/user/AGENTS.md"]');
       return {
         text: output.textContent,
         linkText: link?.textContent || '',
@@ -1672,7 +1672,7 @@ async function runViewport(client, width, height, label) {
     metrics.ansiRenderWorked.linkColor !== "rgb(1, 2, 3)" ||
     metrics.osc8RenderWorked.rawVisible !== false ||
     metrics.osc8RenderWorked.linkText !== "AGENTS.md" ||
-    metrics.osc8RenderWorked.linkUrl !== "file:///home/vox/AGENTS.md" ||
+    metrics.osc8RenderWorked.linkUrl !== "file:///home/user/AGENTS.md" ||
     metrics.mobileSwitcherWorked.labels.length !== 2 ||
     !metrics.mobileSwitcherWorked.labels.includes("ID 1234") ||
     !metrics.mobileSwitcherWorked.labels.includes("ID 2345") ||

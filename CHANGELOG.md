@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.0 - Terminal Dock
+
+- The repository is now `github.com/identxxy/terminal-dock` (renamed from `kitty-remote-deck`; the old URL redirects). Browser-storage keys, the `kitty-remote-deck-browser` frame message source, `KRD_*` environment variables, the `krd_` token prefix and the session cookie keep their names, so saved settings and device sign-ins carry over.
+- Test fixtures and the Chrome smoke use generic host names and paths instead of the author's machines.
+
 ## v0.3.0
 
 - `npm run smoke:ui` (`scripts/ui-smoke.mjs`) drives a real Chrome over the DevTools protocol against a running deck with a device token: layout lock, Browser drawer drag bounds and the right-edge handle, Layouts save/autosave/409/delete, and the phone navigation stack (push, back button, swipe back/forward, unwind). It connects to a remote Chrome with `CDP_URL` or starts a local one, and needs a throwaway tmux session (`DECK_SESSION`, default `krdsmoke`).

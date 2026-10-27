@@ -31,8 +31,8 @@ test("ratio stays inside 0.2–0.8 and actors can be replaced in place", () => {
   const { tree } = splitPane(leaf(actor(1), "a"), "a", "horizontal", actor(1), { paneId: "b", splitId: "s1" });
   assert.equal(resizePaneSplit(tree, "s1", 0.05).ratio, 0.2);
   assert.equal(resizePaneSplit(tree, "s1", 0.95).ratio, 0.8);
-  const replaced = replacePaneActor(tree, "b", { targetId: "vox-ht-tmux", socket: "", windowId: 7 });
-  assert.deepEqual(leaves(replaced)[1].actor, { targetId: "vox-ht-tmux", socket: "", windowId: 7 });
+  const replaced = replacePaneActor(tree, "b", { targetId: "gpu-box-tmux", socket: "", windowId: 7 });
+  assert.deepEqual(leaves(replaced)[1].actor, { targetId: "gpu-box-tmux", socket: "", windowId: 7 });
   assert.equal(leaves(replaced)[0].actor.windowId, 1);
 });
 

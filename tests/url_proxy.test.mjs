@@ -86,7 +86,7 @@ test("public http(s) hosts load directly, private hosts and the document's own h
   assert.equal(shouldProxyUrl("https://cdn.jsdelivr.net/npm/x.js", "file:///tmp/r/index.html"), false);
   assert.equal(shouldProxyUrl("http://localhost:8080/data.json", "file:///tmp/r/index.html"), true);
   assert.equal(shouldProxyUrl("http://gpu-node/x", "file:///tmp/r/index.html"), true);
-  assert.equal(shouldProxyUrl("http://100.88.88.1:3040/y", "file:///tmp/r/index.html"), true);
+  assert.equal(shouldProxyUrl("http://100.64.0.1:3040/y", "file:///tmp/r/index.html"), true);
   assert.equal(shouldProxyUrl("http://192.168.1.4/y", ""), true);
   assert.equal(shouldProxyUrl("https://example.com/img.png", "https://example.com/page.html"), true);
   assert.equal(shouldProxyUrl("https://example.com/img.png", "https://other.org/page.html"), false);
