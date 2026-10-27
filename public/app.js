@@ -1954,7 +1954,10 @@ async function apiFetch(url, options = {}) {
   }
 
   if (!response.ok) {
-    throw new Error(payload.error || "Request failed.");
+    const error = new Error(payload.error || "Request failed.");
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
   }
   return payload;
 }
@@ -2507,10 +2510,9 @@ function loadPaneLayout() {
       const decoded = PANE_TREE.decodePersistedPaneLayout(parsed);
       state.paneRoot = decoded.paneRoot;
       state.activePaneId = decoded.activePaneId;
-      const activeId = parsed.activeLayoutId ?? parsed.activeProfileId;
-      if (typeof activeId === "string" && decoded.paneRoot) {
-        state.activeLayoutId = activeId;
-        state.scratchLayout = decodeLayoutPayload(parsed.scratchLayout || parsed.sessionLayout);
+      if (typeof parsed.activeLayoutId === "string" && decoded.paneRoot) {
+        state.activeLayoutId = parsed.activeLayoutId;
+        state.scratchLayout = decodeLayoutPayload(parsed.scratchLayout);
       }
     }
   } catch (error) {
@@ -2614,11 +2616,27 @@ async function autosaveActiveLayout() {
   if (serialized === state.activeLayoutSaved) {
     return;
   }
-  const data = await apiFetch("/api/layouts", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ layout: { id: layout.id, name: layout.name, ...payload } })
-  });
+  let data;
+  try {
+    data = await apiFetch("/api/layouts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ layout: { id: layout.id, name: layout.name, ...payload }, expectedUpdatedAt: layout.updatedAt || "" })
+    });
+  } catch (error) {
+    if (error.status === 409 && error.payload?.layout) {
+      // Another device wrote this layout first: its copy wins, as on start-up.
+      const index = state.layouts.findIndex((item) => item.id === error.payload.layout.id);
+      if (index >= 0) {
+        state.layouts[index] = error.payload.layout;
+      }
+      await adoptActiveLayout();
+      renderLayouts();
+      setStatus(`Layout "${layout.name}" was changed on another device; showing that copy.`, "warning");
+      return;
+    }
+    throw error;
+  }
   state.activeLayoutSaved = serialized;
   const index = state.layouts.findIndex((item) => item.id === data.layout.id);
   if (index >= 0) {

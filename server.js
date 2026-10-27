@@ -1045,7 +1045,7 @@ async function handleApi(request, response, requestUrl) {
 
     if (request.method === "POST" && requestUrl.pathname === "/api/layouts") {
       const body = await parseRequestBody(request);
-      const layout = await layoutStore.upsert(body.layout || body);
+      const layout = await layoutStore.upsert(body.layout || body, String(body.expectedUpdatedAt || ""));
       sendJson(response, 200, { layout });
       return;
     }
@@ -1387,9 +1387,10 @@ async function handleApi(request, response, requestUrl) {
 
     sendJson(response, 404, { error: "API route not found." });
   } catch (error) {
-    const statusCode = error.message === "Invalid device token." ? 401 : 400;
+    const statusCode = error.statusCode || (error.message === "Invalid device token." ? 401 : 400);
     sendJson(response, statusCode, {
-      error: error.message || "Unexpected error."
+      error: error.message || "Unexpected error.",
+      ...(error.layout ? { layout: error.layout } : {})
     });
   }
 }

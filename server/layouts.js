@@ -1,9 +1,7 @@
 // Named view layouts: a pane tree whose leaves name a target, socket and
 // pane, plus the pinned Browser, stored server-side so every device sees the
 // same list.
-const fs = require("fs");
 const fsp = require("fs/promises");
-const path = require("path");
 
 const PANE_TREE = require("../public/modules/pane-tree");
 
@@ -65,26 +63,18 @@ function normalizeLayout(input, existing = null) {
 }
 
 function createLayoutStore(filePath) {
-  // Lists saved before the rename live in profiles.json next to layouts.json.
-  const legacyPath = path.join(path.dirname(filePath), "profiles.json");
-
-  async function exists(candidate) {
-    try {
-      await fsp.access(candidate, fs.constants.F_OK);
-      return true;
-    } catch (error) {
-      return false;
-    }
-  }
-
   async function read() {
-    const sourcePath = (await exists(filePath)) ? filePath : (await exists(legacyPath)) ? legacyPath : null;
-    if (!sourcePath) {
-      return { layouts: [] };
+    let raw;
+    try {
+      raw = await fsp.readFile(filePath, "utf8");
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        return { layouts: [] };
+      }
+      throw error;
     }
-    const parsed = JSON.parse(await fsp.readFile(sourcePath, "utf8"));
-    const stored = parsed?.layouts ?? parsed?.profiles;
-    const layouts = Array.isArray(stored) ? stored : [];
+    const parsed = JSON.parse(raw);
+    const layouts = Array.isArray(parsed?.layouts) ? parsed.layouts : [];
     return {
       layouts: layouts.flatMap((item) => {
         try {
@@ -111,10 +101,19 @@ function createLayoutStore(filePath) {
     return run;
   }
 
-  // Creates a layout, or replaces the one whose id is given.
-  async function upsertNow(input) {
+  // Creates a layout, or replaces the one whose id is given. A client that
+  // names the `updatedAt` it last saw is refused (409, with the current copy)
+  // when another device has written the layout since, so two devices on the
+  // same layout cannot silently overwrite each other's changes.
+  async function upsertNow(input, expectedUpdatedAt) {
     const store = await read();
     const index = store.layouts.findIndex((item) => item.id === input?.id);
+    if (index >= 0 && expectedUpdatedAt && store.layouts[index].updatedAt !== expectedUpdatedAt) {
+      const error = new Error("Layout was changed on another device.");
+      error.statusCode = 409;
+      error.layout = store.layouts[index];
+      throw error;
+    }
     const layout = normalizeLayout(input, index >= 0 ? store.layouts[index] : null);
     if (index >= 0) {
       store.layouts[index] = layout;
@@ -141,8 +140,8 @@ function createLayoutStore(filePath) {
     async list() {
       return (await read()).layouts;
     },
-    upsert(input) {
-      return serialized(() => upsertNow(input));
+    upsert(input, expectedUpdatedAt = "") {
+      return serialized(() => upsertNow(input, expectedUpdatedAt));
     },
     remove(id) {
       return serialized(() => removeNow(id));

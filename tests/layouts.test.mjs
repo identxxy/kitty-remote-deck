@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -60,17 +60,22 @@ test("normalizeLayout keeps a pinned Browser and rejects bad URLs", () => {
   assert.throws(() => normalizeLayout({ name: "x", ...sampleLayout(), browser: { url: "not a url" } }), /not a valid URL/);
 });
 
-test("store reads a pre-rename profiles.json and writes layouts.json", async () => {
+test("store refuses an autosave that names a stale updatedAt and returns the current copy", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "krd-layouts-"));
   try {
-    const legacy = { profiles: [{ id: "profile-old", name: "old one", ...sampleLayout(), createdAt: "2026-10-01T00:00:00.000Z" }] };
-    await writeFile(path.join(dir, "profiles.json"), JSON.stringify(legacy));
     const store = createLayoutStore(path.join(dir, "layouts.json"));
-    assert.deepEqual((await store.list()).map((item) => [item.id, item.name, item.browser]), [["profile-old", "old one", null]]);
-    await store.upsert({ id: "profile-old", name: "old one", ...sampleLayout(), browser: { url: "https://example.com", targetId: "" } });
-    const written = JSON.parse(await readFile(path.join(dir, "layouts.json"), "utf8"));
-    assert.equal(written.layouts[0].browser.url, "https://example.com");
-    assert.deepEqual((await store.list()).map((item) => item.id), ["profile-old"]);
+    const first = await store.upsert({ name: "shared", ...sampleLayout() });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const second = await store.upsert({ id: first.id, name: "shared", ...sampleLayout(), browser: { url: "https://example.com" } }, first.updatedAt);
+    assert.notEqual(second.updatedAt, first.updatedAt);
+    await assert.rejects(
+      store.upsert({ id: first.id, name: "shared", ...sampleLayout() }, first.updatedAt),
+      (error) => error.statusCode === 409 && error.layout.browser.url === "https://example.com"
+    );
+    // Without an expectation the write goes through, as a manual save does.
+    const third = await store.upsert({ id: first.id, name: "renamed", ...sampleLayout() });
+    assert.equal(third.name, "renamed");
+    assert.deepEqual((await store.list()).map((item) => item.name), ["renamed"]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.0 (unreleased)
+
+- Layout autosaves carry the `updatedAt` they were based on; the server refuses a stale write with 409 and its current copy, which the page adopts with a status message, so two devices on the same layout no longer overwrite each other silently.
+- The pre-rename `profiles.json` fallback and the old `activeProfileId`/`sessionLayout` browser-storage keys are gone; `data/layouts.json` is the only store.
+
 ## v0.2.2 - Terminal Dock
 
 First release under the new name. Both backends are supported: `kitty` (the terminal is a GUI window on the host's display) and `tmux` (headless). The `kitty-remote-deck` repository, launchd label, `KRD_*` environment variables and browser storage keys keep their names so existing deployments and saved settings carry over.
