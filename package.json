@@ -1,11 +1,12 @@
 {
   "name": "terminal-dock",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "description": "Browser remote control for kitty and tmux terminals, local or over SSH.",
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
-    "smoke:chrome": "node scripts/chrome-smoke.mjs"
+    "smoke:chrome": "node scripts/chrome-smoke.mjs",
+    "smoke:ui": "node scripts/ui-smoke.mjs"
   }
 }

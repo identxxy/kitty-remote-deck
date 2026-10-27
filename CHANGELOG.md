@@ -1,7 +1,9 @@
 # Changelog
 
-## v0.3.0 (unreleased)
+## v0.3.0
 
+- `npm run smoke:ui` (`scripts/ui-smoke.mjs`) drives a real Chrome over the DevTools protocol against a running deck with a device token: layout lock, Browser drawer drag bounds and the right-edge handle, Layouts save/autosave/409/delete, and the phone navigation stack (push, back button, swipe back/forward, unwind). It connects to a remote Chrome with `CDP_URL` or starts a local one, and needs a throwaway tmux session (`DECK_SESSION`, default `krdsmoke`).
+- `app.js` has a source test that fails on duplicate top-level declarations and on a `window.KRD*` module that `index.html` does not load. Sidebar and Browser width bounds live in `modules/resize-utils.js`, layout payload decoding in `modules/layout-utils.js`, both unit-tested.
 - Layout autosaves carry the `updatedAt` they were based on; the server refuses a stale write with 409 and its current copy, which the page adopts with a status message, so two devices on the same layout no longer overwrite each other silently.
 - The pre-rename `profiles.json` fallback and the old `activeProfileId`/`sessionLayout` browser-storage keys are gone; `data/layouts.json` is the only store.
 

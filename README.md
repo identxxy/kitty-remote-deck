@@ -5,7 +5,7 @@ A local web app that drives terminals from a browser: an iPad, a phone or anothe
 - `kitty`: the terminal is a GUI kitty window, so everything the browser does is also visible on that machine's physical display.
 - `tmux`: a headless tmux server, with nothing on any display. This is the backend for GPU servers and other machines without a GUI.
 
-Current release: `v0.2.2`. The repository and the launchd service on the author's machine still carry the pre-1.0 name `kitty-remote-deck`.
+Current release: `v0.3.0`. The repository and the launchd service on the author's machine still carry the pre-1.0 name `kitty-remote-deck`.
 
 ## What It Does
 
@@ -194,6 +194,15 @@ npm run smoke:chrome
 ```
 
 Set `CHROME_BIN=/path/to/chrome` if Chrome is not in a common Linux path. Session/control endpoints require device-token login; use the browser UI for authenticated manual checks.
+
+The UI smoke signs in with a real device token and exercises the layout lock, the Browser drawer drag and handle, Layouts (save, autosave, 409 on a stale write, delete) and the phone navigation stack on a desktop and a phone viewport. Point it at a deck whose `data/` may be written to (it saves and deletes a layout and records the fixture page in Reports), with a throwaway tmux session on the target:
+
+```bash
+tmux new-session -d -s krdsmoke
+DECK_URL=http://127.0.0.1:3041 DECK_TOKEN=krd_... npm run smoke:ui
+```
+
+`CDP_URL=http://127.0.0.1:9333` uses a Chrome that is already running (for example one on another host behind an SSH tunnel) instead of starting one; `DECK_TARGET`, `DECK_SESSION` and `DECK_FIXTURE` (an HTML file on the target, default `tests/fixtures/smoke-report.html`) adjust the rest.
 
 ## Versioning
 
